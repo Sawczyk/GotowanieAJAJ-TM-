@@ -7,7 +7,7 @@ import re
 # --- 1. KONFIGURACJA UI ---
 st.set_page_config(
     page_title="Planer Kuchni PRO", 
-    page_icon="🌙", 
+    page_icon="🍳", 
     layout="wide"
 )
 
@@ -51,9 +51,16 @@ def get_data(ws):
     except: return pd.DataFrame()
 
 def save_data(df, ws):
-    # Czyścimy dane przed zapisem (tylko Produkt i Ilosc)
-    df_to_save = df[['Produkt', 'Ilosc']].dropna(subset=['Produkt'])
-    conn.update(worksheet=ws, data=df_to_save)
+    # Automatyczne czyszczenie przed zapisem
+    if not df.empty:
+        # Jeśli to spizarnia, upewnij się że Produkt nie jest pusty
+        if 'Produkt' in df.columns:
+            df = df.dropna(subset=['Produkt'])
+        # Jeśli to przepisy, upewnij się że Nazwa nie jest pusta
+        if 'Nazwa' in df.columns:
+            df = df.dropna(subset=['Nazwa'])
+            
+    conn.update(worksheet=ws, data=df)
     st.cache_data.clear()
 
 # --- 3. INICJALIZACJA ---
@@ -86,7 +93,11 @@ def analizuj_zapasy():
                     nazwa = s.split('(')[0].strip().lower()
                     potrzeby[nazwa] = potrzeby.get(nazwa, 0) + wyciagnij_liczbe(s)
     
-    mag = {str(r['Produkt']).lower(): wyciagnij_liczbe(r['Ilosc']) for _, r in st.session_state.spizarnia_df.iterrows() if not pd.isna(r['Produkt'])}
+    mag = {}
+    if not st.session_state.spizarnia_df.empty:
+        for _, r in st.session_state.spizarnia_df.iterrows():
+            if not pd.isna(r.get('Produkt')):
+                mag[str(r['Produkt']).lower()] = wyciagnij_liczbe(r['Ilosc'])
     return {n: {"potr": p, "mam": mag.get(n, 0), "brak": max(0, p - mag.get(n, 0))} for n, p in potrzeby.items()}
 
 # --- 4. NAWIGACJA HOME ---
@@ -113,6 +124,7 @@ if st.session_state.page == "Home":
     with c4:
         st.markdown("<div class='menu-box'>🛒</div>", unsafe_allow_html=True)
         if st.button("ZAKUPY", use_container_width=True): st.session_state.page = "Zakupy"; st.rerun()
+
 
 # --- 5. MODUŁ: PLANOWANIE ---
 elif st.session_state.page == "Plan":
@@ -152,52 +164,50 @@ elif st.session_state.page == "Plan":
                     df = df[df['Klucz'] != k]
                     df = pd.concat([df, pd.DataFrame([{"Klucz": k, "Wybor": wyb}])], ignore_index=True)
                     st.session_state.plan_df = df
-                    save_data(df, "Plan"); st.rerun()
+                    save_data(df, "Plan")
+                    st.rerun()
 
-# --- 6. MODUŁ: SPIŻARNIA (NAPRAWIONA NUMERACJA) ---
+# --- 6. MODUŁ: SPIŻARNIA ---
 elif st.session_state.page == "Spizarnia":
     st.header("🏠 Twoja Spiżarnia")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
     
-    # Przygotowanie danych (tylko Produkt i Ilosc)
     df_s = st.session_state.spizarnia_df[['Produkt', 'Ilosc']].copy() if not st.session_state.spizarnia_df.empty else pd.DataFrame(columns=['Produkt', 'Ilosc'])
+    st.info("Numeracja po lewej (0, 1, 2...) jest automatyczna. Wpisz produkt w ostatnim wierszu, aby dodać nowy.")
     
-    st.info("Wskazówka: Aby dodać produkt, wpisz nazwę w ostatnim wierszu. Numeracja po lewej (0, 1, 2...) jest automatyczna.")
-    
-    # Edytor bez kolumny Lp - używamy wbudowanego indeksu Streamlit, który sam numeruje wiersze!
-    eds = st.data_editor(
-        df_s, 
-        num_rows="dynamic", 
-        use_container_width=True,
-        column_config={
-            "Produkt": st.column_config.TextColumn("Produkt", placeholder="Wpisz nazwę..."),
-            "Ilosc": st.column_config.NumberColumn("Ilość", placeholder="Wpisz liczbę...")
-        }
-    )
+    eds = st.data_editor(df_s, num_rows="dynamic", use_container_width=True)
     
     if st.button("💾 ZAPISZ STAN SPIŻARNI"):
-        # Zapisujemy do bazy
         save_data(eds, "Spizarnia")
-        # Odświeżamy sesję
         st.session_state.spizarnia_df = eds
-        st.success("Spiżarnia zaktualizowana!")
+        st.success("Zapisano pomyślnie!")
         st.rerun()
 
-# --- 7. MODUŁ: PRZEPISY ---
+# --- 7. MODUŁ: PRZEPISY (USUNIĘTO TYP POSIŁKU) ---
 elif st.session_state.page == "Dodaj":
     st.header("📖 Baza Przepisów")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
+    
+    # Formularz dodawania
     with st.form("recipe_form"):
-        n = st.text_input("Nazwa potrawy")
-        t = st.selectbox("Typ posiłku", ["Śniadanie", "Obiad", "Kolacja"])
-        s = st.text_area("Składniki (np. Jajka (3), Mleko (0.5))")
+        st.write("Dodaj nową potrawę do bazy")
+        n = st.text_input("Nazwa potrawy (np. Naleśniki)")
+        s = st.text_area("Składniki z ilościami (np. Jajka (2), Mleko (0.5), Mąka (200))")
         if st.form_submit_button("DODAJ PRZEPIS"):
             if n and s:
-                new_rec = pd.DataFrame([{"Nazwa": n, "Typ": t, "Skladniki": s}])
+                new_rec = pd.DataFrame([{"Nazwa": n, "Skladniki": s}])
                 st.session_state.przepisy = pd.concat([st.session_state.przepisy, new_rec], ignore_index=True)
                 save_data(st.session_state.przepisy, "Przepisy")
                 st.success(f"Dodano: {n}")
                 st.rerun()
+    
+    st.markdown("---")
+    st.write("Twoje zapisane przepisy:")
+    # Podgląd bazy - bez kolumny Typ
+    if not st.session_state.przepisy.empty:
+        # Upewniamy się, że nie wyświetlamy kolumny Typ, nawet jeśli istnieje w Arkuszu
+        widok_przepisow = st.session_state.przepisy[['Nazwa', 'Skladniki']] if 'Nazwa' in st.session_state.przepisy.columns else st.session_state.przepisy
+        st.dataframe(widok_przepisow, use_container_width=True)
 
 # --- 8. MODUŁ: ZAKUPY ---
 elif st.session_state.page == "Zakupy":
@@ -206,8 +216,8 @@ elif st.session_state.page == "Zakupy":
     b = analizuj_zapasy()
     braki = {k: v for k, v in b.items() if v['brak'] > 0}
     if braki:
-        st.write("Produkty do kupienia:")
+        st.write("Produkty do kupienia na wybrany tydzień:")
         for p, d in braki.items():
             st.warning(f"🔸 **{p.capitalize()}**: dokup {d['brak']}")
     else:
-        st.success("Spiżarnia pełna na ten tydzień! 🎉")
+        st.success("Wszystko masz! 🎉")
