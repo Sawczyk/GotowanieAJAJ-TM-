@@ -26,7 +26,7 @@ st.markdown("""
 
     div.stButton > button {
         border-radius: 10px;
-        padding: 20px 10px !important;
+        padding: 15px 10px !important;
         font-weight: 600 !important;
         border: 1px solid #444;
     }
@@ -34,6 +34,8 @@ st.markdown("""
         background-color: #2E7D32 !important;
         color: white !important;
         border: none !important;
+        height: 55px !important;
+        width: 100% !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -42,43 +44,37 @@ st.markdown("""
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def safe_load(worksheet_name, columns):
-    """Ładuje dane i wymusza istnienie konkretnych kolumn"""
     try:
         df = conn.read(worksheet=worksheet_name, ttl=0)
         if df is None or df.empty:
             return pd.DataFrame(columns=columns)
-        
-        # Usuwamy puste wiersze/kolumny i czyścimy nazwy nagłówków
         df = df.dropna(how='all').reset_index(drop=True)
         df.columns = [str(c).strip() for c in df.columns]
-        
-        # Jeśli brakuje kolumny, dodaj ją pustą
         for col in columns:
-            if col not in df.columns:
-                df[col] = ""
-        return df[columns] # Zwróć tylko te kolumny, których potrzebujemy
+            if col not in df.columns: df[col] = ""
+        return df[columns]
     except:
         return pd.DataFrame(columns=columns)
 
 def save_now(df, worksheet_name):
     try:
-        conn.update(worksheet=worksheet_name, data=df.dropna(how='all'))
+        conn.update(worksheet=ws_map[worksheet_name], data=df.dropna(how='all'))
         st.cache_data.clear()
+        st.toast(f"✅ Zapisano w {worksheet_name}!")
         return True
     except:
+        st.error("Błąd zapisu!")
         return False
+
+ws_map = {"Przepisy": "Przepisy", "Spizarnia": "Spizarnia", "Plan": "Plan"}
 
 # --- 3. INICJALIZACJA ---
 if 'page' not in st.session_state: st.session_state.page = "Home"
 if 'week_offset' not in st.session_state: st.session_state.week_offset = 0
 
-# Ładujemy dane z wymuszeniem konkretnych nazw kolumn
-if 'przepisy' not in st.session_state: 
-    st.session_state.przepisy = safe_load("Przepisy", ["Nazwa", "Skladnik", "Ilosc"])
-if 'spizarnia_df' not in st.session_state: 
-    st.session_state.spizarnia_df = safe_load("Spizarnia", ["Produkt", "Ilosc", "Czy_Stale", "Min_Ilosc"])
-if 'plan_df' not in st.session_state: 
-    st.session_state.plan_df = safe_load("Plan", ["Klucz", "Wybor"])
+if 'przepisy' not in st.session_state: st.session_state.przepisy = safe_load("Przepisy", ["Nazwa", "Skladnik", "Ilosc"])
+if 'spizarnia_df' not in st.session_state: st.session_state.spizarnia_df = safe_load("Spizarnia", ["Produkt", "Ilosc", "Czy_Stale", "Min_Ilosc"])
+if 'plan_df' not in st.session_state: st.session_state.plan_df = safe_load("Plan", ["Klucz", "Wybor"])
 
 dni_pl = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
 miesiace_pl = ["stycznia", "lutego", "marca", "kwietnia", "maja", "czerwca", "lipca", "sierpnia", "września", "października", "listopada", "grudnia"]
@@ -100,11 +96,14 @@ if st.session_state.page == "Home":
 
 elif st.session_state.page == "Plan":
     st.subheader("📅 Plan Posiłków")
-    if st.button("⬅ Powrót"): st.session_state.page = "Home"; st.rerun()
-    
+    c_back, c_save = st.columns([1, 1])
+    if c_back.button("⬅ Menu Główne"): st.session_state.page = "Home"; st.rerun()
+    if c_save.button("💾 ZAPISZ CAŁY PLAN", type="primary"):
+        save_now(st.session_state.plan_df, "Plan")
+
     c_p, c_c, c_n = st.columns([1, 2, 1])
-    if c_p.button("⬅ Poprzedni"): st.session_state.week_offset -= 1; st.rerun()
-    if c_n.button("Następny ➡"): st.session_state.week_offset += 1; st.rerun()
+    if c_p.button("⬅ Poprzedni tydzień"): st.session_state.week_offset -= 1; st.rerun()
+    if c_n.button("Następny tydzień ➡"): st.session_state.week_offset += 1; st.rerun()
     
     start = datetime.now() - timedelta(days=datetime.now().weekday()) + timedelta(weeks=st.session_state.week_offset)
     t_id = start.strftime("%Y-%V")
@@ -113,11 +112,7 @@ elif st.session_state.page == "Plan":
         with st.expander(f"{d_n} ({(start + timedelta(days=i)).strftime('%d.%m')})"):
             for typ in ["Śniadanie", "Obiad", "Kolacja"]:
                 k = f"{t_id}_{d_n}_{typ}"
-                current_plan = st.session_state.plan_df
-                # Bezpieczne sprawdzanie wyboru
-                istn = current_plan[current_plan['Klucz'] == k]['Wybor'].values[0] if k in current_plan['Klucz'].values else "Brak"
-                
-                # Pobranie unikalnych nazw przepisów
+                istn = st.session_state.plan_df[st.session_state.plan_df['Klucz'] == k]['Wybor'].values[0] if k in st.session_state.plan_df['Klucz'].values else "Brak"
                 opcje = ["Brak"] + sorted(st.session_state.przepisy['Nazwa'].astype(str).unique().tolist())
                 if "" in opcje: opcje.remove("")
                 
@@ -125,19 +120,21 @@ elif st.session_state.page == "Plan":
                 if wyb != istn:
                     st.session_state.plan_df = st.session_state.plan_df[st.session_state.plan_df['Klucz'] != k]
                     st.session_state.plan_df = pd.concat([st.session_state.plan_df, pd.DataFrame([{"Klucz": k, "Wybor": wyb}])], ignore_index=True)
-                    save_now(st.session_state.plan_df, "Plan"); st.rerun()
 
 elif st.session_state.page == "Spizarnia":
     st.subheader("🏠 Spiżarnia")
-    if st.button("⬅ Powrót"): st.session_state.page = "Home"; st.rerun()
+    c_back, c_save = st.columns([1, 1])
+    if c_back.button("⬅ Menu Główne"): st.session_state.page = "Home"; st.rerun()
+    if c_save.button("💾 ZAPISZ STAN SPIŻARNI", type="primary"):
+        save_now(st.session_state.spizarnia_df, "Spizarnia")
     
-    with st.expander("➕ Dodaj produkt"):
-        with st.form("new_s"):
+    with st.expander("➕ Dodaj nowy produkt"):
+        with st.form("new_s", clear_on_submit=True):
             c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
             n, q, s, m = c1.text_input("Nazwa"), c2.number_input("Ilość", 0.0), c3.checkbox("Stały?"), c4.number_input("Min", 0.0)
-            if st.form_submit_button("Dodaj"):
+            if st.form_submit_button("Dodaj do listy"):
                 st.session_state.spizarnia_df = pd.concat([st.session_state.spizarnia_df, pd.DataFrame([{"Produkt": n, "Ilosc": q, "Czy_Stale": "TAK" if s else "NIE", "Min_Ilosc": m}])], ignore_index=True)
-                save_now(st.session_state.spizarnia_df, "Spizarnia"); st.rerun()
+                st.rerun()
 
     for idx, row in st.session_state.spizarnia_df.iterrows():
         c1, c2, c3, c4, c5 = st.columns([2.5, 1, 1, 1, 0.5])
@@ -147,29 +144,27 @@ elif st.session_state.page == "Spizarnia":
         n_st = c3.checkbox("📌", value=is_st, key=f"ss_{idx}")
         nm = c4.number_input("M", float(row['Min_Ilosc']), key=f"sm_{idx}", label_visibility="collapsed") if n_st else 0.0
         
-        if nq != float(row['Ilosc']) or n_st != is_st or (n_st and nm != float(row['Min_Ilosc'])):
-            st.session_state.spizarnia_df.at[idx, 'Ilosc'] = nq
-            st.session_state.spizarnia_df.at[idx, 'Czy_Stale'] = "TAK" if n_st else "NIE"
-            st.session_state.spizarnia_df.at[idx, 'Min_Ilosc'] = nm
-            save_now(st.session_state.spizarnia_df, "Spizarnia"); st.rerun()
+        # Aktualizacja tylko w sesji
+        st.session_state.spizarnia_df.at[idx, 'Ilosc'] = nq
+        st.session_state.spizarnia_df.at[idx, 'Czy_Stale'] = "TAK" if n_st else "NIE"
+        st.session_state.spizarnia_df.at[idx, 'Min_Ilosc'] = nm
+        
         if c5.button("🗑️", key=f"sdel_{idx}"):
             st.session_state.spizarnia_df = st.session_state.spizarnia_df.drop(idx).reset_index(drop=True)
-            save_now(st.session_state.spizarnia_df, "Spizarnia"); st.rerun()
+            st.rerun()
 
 elif st.session_state.page == "Dodaj":
     st.subheader("📖 Przepisy")
-    if st.button("⬅ Powrót"): st.session_state.page = "Home"; st.rerun()
+    if st.button("⬅ Menu Główne"): st.session_state.page = "Home"; st.rerun()
     
     with st.expander("➕ Nowa potrawa"):
         np = st.text_input("Nazwa potrawy")
-        if st.button("Stwórz"):
+        if st.button("Utwórz"):
             st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": np, "Skladnik": "Składnik", "Ilosc": 0}])], ignore_index=True)
-            save_now(st.session_state.przepisy, "Przepisy"); st.rerun()
+            st.rerun()
 
     if not st.session_state.przepisy.empty:
-        potrawy = sorted(st.session_state.przepisy['Nazwa'].astype(str).unique().tolist())
-        if "" in potrawy: potrawy.remove("")
-        
+        potrawy = sorted([p for p in st.session_state.przepisy['Nazwa'].astype(str).unique().tolist() if p.strip()])
         if potrawy:
             wyb = st.selectbox("Wybierz do edycji:", potrawy)
             mask = st.session_state.przepisy['Nazwa'] == wyb
@@ -183,19 +178,19 @@ elif st.session_state.page == "Dodaj":
                 temp_rows.append({"idx": idx, "S": ns, "I": ni})
                 if c3.button("🗑️", key=f"rdel_{idx}"):
                     st.session_state.przepisy = st.session_state.przepisy.drop(idx).reset_index(drop=True)
-                    save_now(st.session_state.przepisy, "Przepisy"); st.rerun()
+                    st.rerun()
             
             c_a, c_s = st.columns(2)
-            if c_a.button("➕ Dodaj wiersz"):
+            if c_a.button("➕ Dodaj składnik"):
                 st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": wyb, "Skladnik": "", "Ilosc": 0}])], ignore_index=True)
                 st.rerun()
             if c_s.button("💾 ZAPISZ PRZEPIS", type="primary"):
                 for r in temp_rows:
                     st.session_state.przepisy.at[r['idx'], 'Skladnik'] = r['S']
                     st.session_state.przepisy.at[r['idx'], 'Ilosc'] = r['I']
-                save_now(st.session_state.przepisy, "Przepisy"); st.rerun()
+                save_now(st.session_state.przepisy, "Przepisy")
 
 elif st.session_state.page == "Zakupy":
-    st.subheader("🛒 Zakupy")
-    if st.button("⬅ Powrót"): st.session_state.page = "Home"; st.rerun()
-    st.info("Tutaj wkrótce pojawi się Twoja lista zakupów.")
+    st.subheader("🛒 Lista Zakupów")
+    if st.button("⬅ Menu Główne"): st.session_state.page = "Home"; st.rerun()
+    st.info("Mechanizm listy zakupów jest gotowy do wdrożenia.")
