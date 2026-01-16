@@ -4,17 +4,75 @@ import pandas as pd
 from datetime import datetime, timedelta
 import re
 
-# --- 1. KONFIGURACJA ---
-st.set_page_config(page_title="Inteligentny Planer Kuchni", layout="wide")
+# --- 1. KONFIGURACJA I STYLIZACJA UI ---
+st.set_page_config(
+    page_title="Planer Kuchni Pro", 
+    page_icon="🍳", 
+    layout="wide", 
+    initial_sidebar_state="collapsed"
+)
+
+# Custom CSS dla nowoczesnego wyglądu (Light Mode)
+st.markdown("""
+    <style>
+    /* Główny font i tło */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    
+    html, body, [data-testid="stAppViewContainer"] {
+        font-family: 'Inter', sans-serif;
+        background-color: #f8f9fa;
+    }
+
+    /* Karty (Expander) */
+    .streamlit-expanderHeader {
+        background-color: white !important;
+        border-radius: 10px !important;
+        border: 1px solid #e9ecef !important;
+        font-weight: 600 !important;
+        color: #212529 !important;
+    }
+    
+    /* Przyciski */
+    .stButton>button {
+        border-radius: 8px;
+        border: none;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        padding: 0.5rem 1rem;
+    }
+    
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+
+    /* Menu główne (Kafelki) */
+    .menu-card {
+        background-color: white;
+        padding: 2rem;
+        border-radius: 15px;
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        border: 1px solid #e9ecef;
+        margin-bottom: 1rem;
+    }
+
+    /* Styl alertów */
+    div[data-testid="stNotification"] {
+        border-radius: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 2. POŁĄCZENIE I FUNKCJE ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- 2. SILNIK OBLICZENIOWY ---
 def wyciagnij_liczbe(tekst):
     match = re.search(r"(\d+[\.,]?\d*)", str(tekst))
     if match:
         return float(match.group(1).replace(',', '.'))
     return 0
-
+    
 def get_data(worksheet_name):
     try:
         df = conn.read(worksheet=worksheet_name, ttl=0)
@@ -75,16 +133,53 @@ def analizuj_zapasy_tygodniowe():
         bilans[nazwa] = {"potrzeba": potrzebna_ilosc, "mam": stan_w_domu, "brakuje": brakuje}
     return bilans
 
-# --- 4. NAWIGACJA HOME ---
+# --- 4. NAWIGACJA HOME (DESIGN KAFELKOWY) ---
 if st.session_state.page == "Home":
-    st.title("🍴 Inteligentny System Kuchni")
-    c1, c2 = st.columns(2)
+    st.markdown("<h1 style='text-align: center; color: #1f1f1f; margin-bottom: 2rem;'>🥘 Mój Inteligentny Planer</h1>", unsafe_allow_html=True)
+    
+    c1, c2, c3, c4 = st.columns(4)
+    
     with c1:
-        if st.button("📅 PLANOWANIE", use_container_width=True): st.session_state.page = "Plan"; st.rerun()
-        if st.button("🏠 SPIŻARNIA", use_container_width=True): st.session_state.page = "Spizarnia"; st.rerun()
+        st.markdown("<div class='menu-card'>📅</div>", unsafe_allow_html=True)
+        if st.button("PLANOWANIE", use_container_width=True): 
+            st.session_state.page = "Plan"; st.rerun()
+            
     with c2:
-        if st.button("➕ DODAJ PRZEPIS", use_container_width=True): st.session_state.page = "Dodaj"; st.rerun()
-        if st.button("🛒 ZAKUPY", use_container_width=True): st.session_state.page = "Zakupy"; st.rerun()
+        st.markdown("<div class='menu-card'>🏠</div>", unsafe_allow_html=True)
+        if st.button("SPIŻARNIA", use_container_width=True): 
+            st.session_state.page = "Spizarnia"; st.rerun()
+            
+    with c3:
+        st.markdown("<div class='menu-card'>📖</div>", unsafe_allow_html=True)
+        if st.button("PRZEPISY", use_container_width=True): 
+            st.session_state.page = "Dodaj"; st.rerun()
+            
+    with c4:
+        st.markdown("<div class='menu-card'>🛒</div>", unsafe_allow_html=True)
+        if st.button("ZAKUPY", use_container_width=True): 
+            st.session_state.page = "Zakupy"; st.rerun()
+
+    # Szybki podgląd stanu na dziś
+    st.divider()
+    st.subheader("💡 Dzisiejsze Menu")
+    dzisiaj = datetime.now().strftime("%A")
+    # Tłumaczenie dnia na PL dla klucza
+    dni_pl = {"Monday": "Poniedziałek", "Tuesday": "Wtorek", "Wednesday": "Środa", "Thursday": "Czwartek", "Friday": "Piątek", "Saturday": "Sobota", "Sunday": "Niedziela"}
+    dzien_pl = dni_pl.get(dzisiaj)
+    tydzien_id = datetime.now().strftime("%Y-%V")
+    
+    cols = st.columns(3)
+    p_typy = ["Śniadanie", "Lunch", "Kolacja"]
+    for i, p_typ in enumerate(p_typy):
+        klucz = f"{tydzien_id}_{dzien_pl}_{p_typ}"
+        with cols[i]:
+            with st.container(border=True):
+                st.caption(p_typ)
+                if not st.session_state.plan_df.empty and klucz in st.session_state.plan_df['Klucz'].values:
+                    danie = st.session_state.plan_df[st.session_state.plan_df['Klucz'] == klucz]['Wybor'].values[0]
+                    st.write(f"**{danie}**")
+                else:
+                    st.write("*Nie zaplanowano*")
 # --- 5. MODUŁ: PLANOWANIE ---
 elif st.session_state.page == "Plan":
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
