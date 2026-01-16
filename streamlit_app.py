@@ -7,13 +7,32 @@ import time
 # --- 1. KONFIGURACJA UI ---
 st.set_page_config(page_title="Planer Kuchni PRO", page_icon="🍳", layout="wide")
 
+# CSS dla zielonego przycisku i estetyki
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600&display=swap');
     html, body, [data-testid="stAppViewContainer"] { font-family: 'Sora', sans-serif; }
+    
+    /* Menu Główne */
     .menu-box { background-color: #1E1E1E; border: 1px solid #333333; padding: 25px; border-radius: 15px; text-align: center; }
     .today-highlight { background: linear-gradient(90deg, #1B5E20, #2E7D32); padding: 20px; border-radius: 15px; text-align: center; margin-bottom: 25px; border: 1px solid #4CAF50; }
+    
+    /* Sekcja Przepisów */
     .recipe-section { background-color: #1E1E1E; padding: 20px; border-radius: 15px; border: 1px solid #444; margin-top: 10px; }
+    
+    /* ZIELONY PRZYCISK PRIMARY */
+    div.stButton > button[kind="primary"] {
+        background-color: #2E7D32 !important;
+        color: white !important;
+        border-color: #4CAF50 !important;
+        font-weight: bold !important;
+        width: 100%;
+    }
+    div.stButton > button[kind="primary"]:hover {
+        background-color: #388E3C !important;
+        border-color: #81C784 !important;
+    }
+    
     .stButton button { width: 100%; }
     </style>
     """, unsafe_allow_html=True)
@@ -174,9 +193,7 @@ elif st.session_state.page == "Dodaj":
     if not st.session_state.przepisy.empty:
         wyb = st.selectbox("Edytuj potrawę:", sorted(st.session_state.przepisy['Nazwa'].unique().tolist()))
         
-        # --- NOWY MECHANIZM EDYCJI ---
         st.markdown("<div class='recipe-section'>", unsafe_allow_html=True)
-        # Filtrujemy składniki wybranej potrawy
         mask = st.session_state.przepisy['Nazwa'] == wyb
         items = st.session_state.przepisy[mask].copy()
         
@@ -191,15 +208,14 @@ elif st.session_state.page == "Dodaj":
                 to_delete = idx
             updated_rows.append({"Nazwa": wyb, "Skladnik": new_s, "Ilosc": new_i, "old_idx": idx})
 
-        c1, c2 = st.columns(2)
-        if c1.button("➕ Dodaj wiersz składnika"):
+        # Przycisk dodawania wiersza (standardowy)
+        if st.button("➕ DODAJ WIERSZ SKŁADNIKA", key="add_row"):
             st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": wyb, "Skladnik": "", "Ilosc": 0}])], ignore_index=True)
             st.rerun()
 
         st.markdown("---")
-        # FIZYCZNY PRZYCISK ZAPISU
-        if st.button("💾 ZAPISZ CAŁY PRZEPIS", type="primary"):
-            # Aktualizujemy główny dataframe na podstawie wpisanych danych
+        # ZIELONY PRZYCISK ZAPISU (typ primary)
+        if st.button("💾 ZAPISZ CAŁY PRZEPIS", type="primary", key="save_recipe"):
             for row in updated_rows:
                 st.session_state.przepisy.at[row['old_idx'], 'Skladnik'] = row['Skladnik']
                 st.session_state.przepisy.at[row['old_idx'], 'Ilosc'] = row['Ilosc']
@@ -213,6 +229,7 @@ elif st.session_state.page == "Dodaj":
             
         st.markdown("</div>", unsafe_allow_html=True)
         
+        # Przycisk usuwania na samym dole, czerwony przez motyw (nie-primary)
         if st.button("❌ Usuń całą potrawę", key="del_entire"):
             st.session_state.przepisy = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] != wyb].reset_index(drop=True)
             save_data(st.session_state.przepisy, "Przepisy")
