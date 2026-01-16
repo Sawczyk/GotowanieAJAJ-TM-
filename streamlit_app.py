@@ -13,8 +13,7 @@ st.markdown("""
     html, body, [data-testid="stAppViewContainer"] { font-family: 'Sora', sans-serif; }
     .menu-box { background-color: #1E1E1E; border: 1px solid #333333; padding: 25px; border-radius: 15px; text-align: center; margin-bottom: 10px; }
     .today-highlight { background: linear-gradient(90deg, #1B5E20, #2E7D32); padding: 20px; border-radius: 15px; text-align: center; margin-bottom: 30px; border: 1px solid #4CAF50; }
-    .recipe-card { background-color: #262626; padding: 15px; border-radius: 10px; border-left: 5px solid #4CAF50; margin-bottom: 10px; }
-    .edit-box { background-color: #333; padding: 15px; border-radius: 10px; margin-bottom: 10px; border: 1px solid #ffaa00; }
+    .recipe-row { background-color: #1E1E1E; padding: 15px; border-radius: 10px; border: 1px solid #333; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -42,7 +41,6 @@ if 'week_offset' not in st.session_state: st.session_state.week_offset = 0
 if 'przepisy' not in st.session_state: st.session_state.przepisy = get_data("Przepisy")
 if 'spizarnia_df' not in st.session_state: st.session_state.spizarnia_df = get_data("Spizarnia")
 if 'plan_df' not in st.session_state: st.session_state.plan_df = get_data("Plan")
-if 'editing_recipe' not in st.session_state: st.session_state.editing_recipe = None
 
 dni_pl = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
 
@@ -139,48 +137,50 @@ elif st.session_state.page == "Spizarnia":
             save_data(st.session_state.spizarnia_df, "Spizarnia"); st.rerun()
 
 elif st.session_state.page == "Dodaj":
-    st.header("📖 Przepisy")
+    st.header("📖 Baza Przepisów")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
     
-    # Formularz dodawania
     with st.form("add_recipe"):
-        st.subheader("➕ Dodaj nowy przepis")
-        n = st.text_input("Nazwa potrawy")
-        s = st.text_area("Składniki (np. Jajka (3), Mleko (0.5))")
-        if st.form_submit_button("DODAJ DO BAZY"):
+        st.subheader("➕ Nowy przepis")
+        c1, c2 = st.columns([1, 2])
+        n = c1.text_input("Nazwa potrawy")
+        s = c2.text_input("Składniki (np. Jajka (3), Mleko (0.5))")
+        if st.form_submit_button("DODAJ"):
             if n and s:
                 st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": n, "Skladniki": s}])], ignore_index=True)
                 save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
 
     st.markdown("---")
-    st.subheader("📜 Twoja baza przepisów")
+    st.subheader("📜 Edytuj bazę przepisów")
     
     for idx, row in st.session_state.przepisy.iterrows():
-        # Sprawdzamy, czy ten przepis jest właśnie edytowany
-        if st.session_state.editing_recipe == idx:
-            with st.container():
-                st.markdown("<div class='edit-box'>", unsafe_allow_html=True)
-                new_name = st.text_input("Edytuj nazwę", value=row['Nazwa'], key=f"edit_n_{idx}")
-                new_ingredients = st.text_area("Edytuj składniki", value=row['Skladniki'], key=f"edit_s_{idx}")
-                col_e1, col_e2 = st.columns(2)
-                if col_e1.button("💾 ZAPISZ", key=f"save_r_{idx}"):
-                    st.session_state.przepisy.at[idx, 'Nazwa'] = new_name
-                    st.session_state.przepisy.at[idx, 'Skladniki'] = new_ingredients
+        with st.container():
+            # Każdy przepis w osobnej sekcji z polami edycyjnymi
+            col_idx, col_name, col_ing, col_actions = st.columns([0.4, 3, 5, 1.2])
+            
+            col_idx.write(f"{idx+1}.")
+            
+            # Edycja nazwy w locie
+            new_n = col_name.text_input("Nazwa", value=row['Nazwa'], key=f"rn_{idx}", label_visibility="collapsed")
+            
+            # Edycja składników w locie
+            new_s = col_ing.text_input("Składniki", value=row['Skladniki'], key=f"rs_{idx}", label_visibility="collapsed")
+            
+            # Przyciski akcji
+            c_save, c_del = col_actions.columns(2)
+            
+            # Jeśli cokolwiek się zmieniło, pokazujemy przycisk zapisu (opcjonalnie można zapisać automatycznie, 
+            # ale przy tekście lepiej mieć kontrolę przyciskiem "Dyskietka")
+            if new_n != row['Nazwa'] or new_s != row['Skladniki']:
+                if c_save.button("💾", key=f"sv_r_{idx}"):
+                    st.session_state.przepisy.at[idx, 'Nazwa'] = new_n
+                    st.session_state.przepisy.at[idx, 'Skladniki'] = new_s
                     save_data(st.session_state.przepisy, "Przepisy")
-                    st.session_state.editing_recipe = None
                     st.rerun()
-                if col_e2.button("❌ ANULUJ", key=f"canc_r_{idx}"):
-                    st.session_state.editing_recipe = None
-                    st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
-        else:
-            # Standardowy widok karty
-            st.markdown(f"<div class='recipe-card'><b>{idx+1}. {row['Nazwa']}</b><br>{row['Skladniki']}</div>", unsafe_allow_html=True)
-            col_b1, col_b2 = st.columns([1, 5])
-            if col_b1.button("✏️ EDYTUJ", key=f"edit_btn_{idx}"):
-                st.session_state.editing_recipe = idx
-                st.rerun()
-            if col_b2.button(f"🗑️ USUŃ {row['Nazwa']}", key=f"dr_{idx}"):
+            else:
+                c_save.write("") # Puste miejsce jeśli brak zmian
+
+            if c_del.button("🗑️", key=f"del_r_{idx}"):
                 st.session_state.przepisy = st.session_state.przepisy.drop(idx).reset_index(drop=True)
                 save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
 
