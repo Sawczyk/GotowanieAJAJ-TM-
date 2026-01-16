@@ -4,24 +4,20 @@ import pandas as pd
 from datetime import datetime, timedelta
 import re
 
-# --- 1. KONFIGURACJA I STYLIZACJA DARK MODE ---
+# --- 1. KONFIGURACJA UI ---
 st.set_page_config(
     page_title="Planer Kuchni PRO", 
     page_icon="🌙", 
     layout="wide"
 )
 
-# CSS dostosowany do Dark Mode
+# Stylizacja Dark Mode i Font Sora
 st.markdown("""
     <style>
-    /* Nowoczesny font */
     @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600&display=swap');
-    
     html, body, [data-testid="stAppViewContainer"] {
         font-family: 'Sora', sans-serif;
     }
-
-    /* Karty menu na ekranie głównym */
     .menu-box {
         background-color: #1E1E1E;
         border: 1px solid #333333;
@@ -29,34 +25,27 @@ st.markdown("""
         border-radius: 15px;
         text-align: center;
         margin-bottom: 10px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
     }
-
-    /* Stylistyka przycisków */
-    .stButton>button {
-        border-radius: 10px;
-        font-weight: 600;
-        transition: all 0.2s;
-    }
-
-    /* Nagłówek dnia dzisiejszego */
     .today-highlight {
-        background: linear-gradient(90deg, #2E7D32, #1B5E20);
-        padding: 15px;
-        border-radius: 12px;
+        background: linear-gradient(90deg, #1B5E20, #2E7D32);
+        padding: 20px;
+        border-radius: 15px;
         text-align: center;
-        margin-bottom: 25px;
+        margin-bottom: 30px;
+        border: 1px solid #4CAF50;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. SILNIK DANYCH ---
+# --- 2. POŁĄCZENIE I FUNKCJE ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def wyciagnij_liczbe(tekst):
-    if pd.isna(tekst): return 0
+    if pd.isna(tekst) or tekst == "": return 0
     match = re.search(r"(\d+[\.,]?\d*)", str(tekst))
-    return float(match.group(1).replace(',', '.')) if match else 0
+    if match:
+        return float(match.group(1).replace(',', '.'))
+    return 0
 
 def get_data(ws):
     try:
@@ -67,7 +56,7 @@ def get_data(ws):
 def save_data(df, ws):
     df = df.dropna(how='all')
     conn.update(worksheet=ws, data=df)
-    st.cache_data.
+    st.cache_data.clear() # POPRAWIONA LINIA (bez błędu składni)
 
 # --- 3. INICJALIZACJA ---
 if 'przepisy' not in st.session_state: st.session_state.przepisy = get_data("Przepisy")
@@ -85,29 +74,35 @@ def get_week_dates(offset):
 
 def analizuj_zapasy():
     potrzeby = {}
-    dni = get_week_dates(st.session_state.week_offset)
-    t_id = dni[0].strftime("%Y-%V")
+    dates = get_week_dates(st.session_state.week_offset)
+    t_id = dates[0].strftime("%Y-%V")
     if st.session_state.plan_df.empty: return {}
+    
     plan = st.session_state.plan_df[st.session_state.plan_df['Klucz'].astype(str).str.contains(t_id)]
     for w in plan['Wybor']:
         if w != "Brak":
             p = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == w]
             if not p.empty:
-                for s in str(p.iloc[0]['Skladniki']).split(','):
-                    n = s.split('(')[0].strip().lower()
-                    potreby[n] = potrzeby.get(n, 0) + wyciagnij_liczbe(s)
-    mag = {str(r['Produkt']).lower(): wyciagnij_liczbe(r['Ilosc']) for _, r in st.session_state.spizarnia_df.iterrows()} if not st.session_state.spizarnia_df.empty else {}
+                skladniki = str(p.iloc[0]['Skladniki']).split(',')
+                for s in skladniki:
+                    nazwa = s.split('(')[0].strip().lower()
+                    potrzeby[nazwa] = potrzeby.get(nazwa, 0) + wyciagnij_liczbe(s)
+    
+    mag = {}
+    if not st.session_state.spizarnia_df.empty:
+        for _, r in st.session_state.spizarnia_df.iterrows():
+            mag[str(r['Produkt']).lower()] = wyciagnij_liczbe(r['Ilosc'])
+            
     return {n: {"potr": p, "mam": mag.get(n, 0), "brak": max(0, p - mag.get(n, 0))} for n, p in potrzeby.items()}
 
 # --- 4. NAWIGACJA ---
 if st.session_state.page == "Home":
-    # Sekcja daty
     teraz = datetime.now()
     dzien_dzis = dni_pl[teraz.weekday()]
     st.markdown(f"""
         <div class='today-highlight'>
-            <h2 style='margin:0; color:white;'>📅 Dziś jest {dzien_dzis}</h2>
-            <p style='margin:0; color:white; opacity:0.8;'>{teraz.strftime('%d.%m.%Y')}</p>
+            <h1 style='margin:0; color:white; font-size: 2.5rem;'>{dzien_dzis}</h1>
+            <p style='margin:0; color:white; opacity:0.9; font-size: 1.2rem;'>{teraz.strftime('%d stycznia %Y')}</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -133,18 +128,20 @@ elif st.session_state.page == "Plan":
     if col1.button("⬅ Poprzedni"): st.session_state.week_offset -= 1; st.rerun()
     if col3.button("Następny ➡"): st.session_state.week_offset += 1; st.rerun()
     
-    dni = get_week_dates(st.session_state.week_offset)
-    t_id = dni[0].strftime("%Y-%V")
+    dates = get_week_dates(st.session_state.week_offset)
+    t_id = dates[0].strftime("%Y-%V")
     
-    with st.expander("📊 STAN SKŁADNIKÓW NA TEN TYDZIEŃ", expanded=True):
+    with st.expander("📊 CZY STARCZY SKŁADNIKÓW?", expanded=True):
         b = analizuj_zapasy()
-        for p, d in b.items():
-            col_a, col_b = st.columns([3,1])
-            col_a.write(f"**{p.capitalize()}** (Potrzeba: {d['potr']}, Masz: {d['mam']})")
-            if d['brak'] > 0: col_b.error(f"Brakuje: {d['brak']}")
-            else: col_b.success("OK")
+        if b:
+            for p, d in b.items():
+                col_a, col_b = st.columns([3,1])
+                col_a.write(f"**{p.capitalize()}** (Potrzeba: {d['potr']}, Masz: {d['mam']})")
+                if d['brak'] > 0: col_b.error(f"Brakuje: {d['brak']}")
+                else: col_b.success("Mamy to!")
+        else: st.info("Dodaj posiłki do planu, aby zobaczyć analizę.")
 
-    for i, d_obj in enumerate(dni):
+    for i, d_obj in enumerate(dates):
         with st.expander(f"{dni_pl[i]} ({d_obj.strftime('%d.%m')})"):
             for typ in ["Śniadanie", "Lunch", "Kolacja"]:
                 k = f"{t_id}_{dni_pl[i]}_{typ}"
@@ -156,31 +153,40 @@ elif st.session_state.page == "Plan":
                     df = df[df['Klucz'] != k]
                     df = pd.concat([df, pd.DataFrame([{"Klucz": k, "Wybor": wyb}])], ignore_index=True)
                     st.session_state.plan_df = df
-                    save_data(df, "Plan"); st.rerun()
+                    save_data(df, "Plan")
+                    st.rerun()
 
 elif st.session_state.page == "Spizarnia":
-    st.header("Twoja Spiżarnia")
+    st.header("🏠 Twoja Spiżarnia")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
     eds = st.data_editor(st.session_state.spizarnia_df if not st.session_state.spizarnia_df.empty else pd.DataFrame(columns=['Produkt', 'Ilosc']), num_rows="dynamic", use_container_width=True)
-    if st.button("ZAPISZ"): save_data(eds, "Spizarnia"); st.success("Zapisano!"); st.rerun()
+    if st.button("💾 ZAPISZ STAN SPIŻARNI"):
+        save_data(eds, "Spizarnia")
+        st.session_state.spizarnia_df = eds
+        st.success("Zapisano!")
 
 elif st.session_state.page == "Dodaj":
-    st.header("Nowy Przepis")
+    st.header("📖 Baza Przepisów")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
-    with st.form("przepis"):
-        n = st.text_input("Nazwa")
-        t = st.selectbox("Typ", ["Śniadanie", "Lunch", "Kolacja"])
-        s = st.text_area("Składniki, np: Jajka (3), Mleko (1)")
-        if st.form_submit_button("DODAJ"):
+    with st.form("recipe_form"):
+        n = st.text_input("Nazwa potrawy")
+        t = st.selectbox("Typ posiłku", ["Śniadanie", "Lunch", "Kolacja"])
+        s = st.text_area("Składniki (np. Jajka (3), Mleko (0.5))")
+        if st.form_submit_button("DODAJ PRZEPIS"):
             if n and s:
-                df = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": n, "Typ": t, "Skladniki": s}])], ignore_index=True)
-                save_data(df, "Przepisy"); st.rerun()
+                new_recipe = pd.DataFrame([{"Nazwa": n, "Typ": t, "Skladniki": s}])
+                st.session_state.przepisy = pd.concat([st.session_state.przepisy, new_recipe], ignore_index=True)
+                save_data(st.session_state.przepisy, "Przepisy")
+                st.success(f"Dodano: {n}")
 
 elif st.session_state.page == "Zakupy":
-    st.header("Lista Zakupów")
+    st.header("🛒 Lista Zakupów")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
     b = analizuj_zapasy()
     braki = {k: v for k, v in b.items() if v['brak'] > 0}
     if braki:
-        for p, d in braki.items(): st.warning(f"🛒 {p.capitalize()} - dokup: {d['brak']}")
-    else: st.success("Masz wszystko!")
+        st.write("Produkty do kupienia:")
+        for p, d in braki.items():
+            st.warning(f"🔸 **{p.capitalize()}**: dokup {d['brak']}")
+    else:
+        st.success("Twoja spiżarnia jest gotowa na ten tydzień! 🎉")
