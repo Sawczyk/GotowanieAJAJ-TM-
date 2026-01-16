@@ -54,7 +54,6 @@ def wyciagnij_liczbe(tekst):
 if 'page' not in st.session_state: st.session_state.page = "Home"
 if 'week_offset' not in st.session_state: st.session_state.week_offset = 0
 
-# Ładowanie danych do sesji
 if 'przepisy' not in st.session_state: st.session_state.przepisy = get_data("Przepisy")
 if 'spizarnia_df' not in st.session_state: st.session_state.spizarnia_df = get_data("Spizarnia")
 if 'plan_df' not in st.session_state: st.session_state.plan_df = get_data("Plan")
@@ -67,10 +66,9 @@ def get_week_dates(offset):
 
 def analizuj_zapasy():
     potrzeby = {}
-    
-    # 1. Z planu posiłków
     dates = get_week_dates(st.session_state.week_offset)
     t_id = dates[0].strftime("%Y-%V")
+    
     if not st.session_state.plan_df.empty:
         plan_tydzien = st.session_state.plan_df[st.session_state.plan_df['Klucz'].astype(str).str.contains(t_id)]
         for potrawa in plan_tydzien['Wybor']:
@@ -81,34 +79,21 @@ def analizuj_zapasy():
                     if nazwa:
                         potrzeby[nazwa] = potrzeby.get(nazwa, 0) + wyciagnij_liczbe(row.get('Ilosc', 0))
 
-    # 2. Porównanie ze Spiżarnią (uwzględniając produkty stałe)
     magazyn_stan = {}
     magazyn_minimum = {}
-    
     for _, r in st.session_state.spizarnia_df.iterrows():
-        prod_name = str(r['Produkt']).lower().strip()
-        if not prod_name: continue
-        
-        magazyn_stan[prod_name] = wyciagnij_liczbe(r['Ilosc'])
-        
-        # Jeśli produkt jest oznaczony jako stały, dodaj go do potrzeb (minimum)
+        p_name = str(r['Produkt']).lower().strip()
+        if not p_name: continue
+        magazyn_stan[p_name] = wyciagnij_liczbe(r['Ilosc'])
         if str(r.get('Czy_Stale', '')).upper() == 'TAK':
-            mini = wyciagnij_liczbe(r.get('Min_Ilosc', 0))
-            magazyn_minimum[prod_name] = mini
+            magazyn_minimum[p_name] = wyciagnij_liczbe(r.get('Min_Ilosc', 0))
 
-    # Łączymy potrzeby z przepisów i potrzeby ze stałych zapasów
-    wszystkie_produkty = set(list(potrzeby.keys()) + list(magazyn_minimum.keys()))
-    
+    wszystkie = set(list(potrzeby.keys()) + list(magazyn_minimum.keys()))
     wynik = {}
-    for n in wszystkie_produkty:
-        p_przepis = potrzeby.get(n, 0)
-        p_minimum = magazyn_minimum.get(n, 0)
-        
-        wymagane = max(p_przepis, p_minimum)
+    for n in wszystkie:
+        wymagane = max(potrzeby.get(n, 0), magazyn_minimum.get(n, 0))
         obecne = magazyn_stan.get(n, 0)
-        
         wynik[n] = {"potr": wymagane, "mam": obecne, "brak": max(0, wymagane - obecne)}
-    
     return wynik
 
 # --- 5. LOGIKA STRON ---
@@ -117,8 +102,8 @@ dni_pl = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", 
 if st.session_state.page == "Home":
     st.markdown(f"<div class='today-highlight'><h1>{dni_pl[datetime.now().weekday()]}</h1></div>", unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
-    p_config = [("PLAN", "Plan", "📅"), ("SPIŻARNIA", "Spizarnia", "🏠"), ("PRZEPISY", "Dodaj", "📖"), ("ZAKUPY", "Zakupy", "🛒")]
-    for i, (label, pg, icon) in enumerate(p_config):
+    pages = [("PLAN", "Plan", "📅"), ("SPIŻARNIA", "Spizarnia", "🏠"), ("PRZEPISY", "Dodaj", "📖"), ("ZAKUPY", "Zakupy", "🛒")]
+    for i, (label, pg, icon) in enumerate(pages):
         with [c1, c2, c3, c4][i]:
             st.markdown(f"<div class='menu-box'><h1>{icon}</h1></div>", unsafe_allow_html=True)
             if st.button(label, key=f"btn_{pg}", use_container_width=True): 
@@ -127,7 +112,6 @@ if st.session_state.page == "Home":
 elif st.session_state.page == "Plan":
     st.header("📅 Planowanie")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
-    # (Logika planowania)
     cp, ci, cn = st.columns([1, 2, 1])
     if cp.button("⬅"): st.session_state.week_offset -= 1; st.rerun()
     dates = get_week_dates(st.session_state.week_offset)
@@ -148,49 +132,48 @@ elif st.session_state.page == "Plan":
                     save_data(st.session_state.plan_df, "Plan"); st.rerun()
 
 elif st.session_state.page == "Spizarnia":
-    st.header("🏠 Spiżarnia i Stałe Zapasy")
+    st.header("🏠 Spiżarnia")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
     
+    # Formularz dodawania
     with st.form("add_spiz", clear_on_submit=True):
         c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
         new_n = c1.text_input("Nazwa produktu")
         new_i = c2.number_input("Ilość obecna", min_value=0.0)
         is_stale = c3.checkbox("Produkt stały?")
-        min_i = c4.number_input("Minimum", min_value=0.0)
-        if st.form_submit_button("➕ DODAJ DO SPIŻARNI"):
+        min_i = c4.number_input("Minimum (jeśli stały)", min_value=0.0)
+        if st.form_submit_button("➕ DODAJ"):
             if new_n:
-                row = {"Produkt": new_n, "Ilosc": new_i, "Czy_Stale": "TAK" if is_stale else "NIE", "Min_Ilosc": min_i}
+                row = {"Produkt": new_n, "Ilosc": new_i, "Czy_Stale": "TAK" if is_stale else "NIE", "Min_Ilosc": min_i if is_stale else 0}
                 st.session_state.spizarnia_df = pd.concat([st.session_state.spizarnia_df, pd.DataFrame([row])], ignore_index=True)
                 save_data(st.session_state.spizarnia_df, "Spizarnia"); st.rerun()
 
     st.markdown("---")
-    # Nagłówki listy
     hc1, hc2, hc3, hc4, hc5 = st.columns([2.5, 1, 1, 1, 0.5])
     hc1.caption("PRODUKT")
     hc2.caption("STAN")
     hc3.caption("STAŁY?")
-    hc4.caption("MIN")
+    hc4.caption("MINIMUM")
     
     for idx, row in st.session_state.spizarnia_df.iterrows():
         c1, c2, c3, c4, c5 = st.columns([2.5, 1, 1, 1, 0.5])
-        
         c1.write(f"**{row['Produkt']}**")
-        
-        # Ilość obecna
         curr_i = c2.number_input("Ilość", value=float(row['Ilosc']), key=f"sq_{idx}", label_visibility="collapsed")
         
-        # Czy stały
         st_val = True if str(row.get('Czy_Stale', '')).upper() == 'TAK' else False
-        new_st = c3.checkbox("📌", value=st_val, key=f"st_ch_{idx}")
+        new_st = c3.checkbox("📌", value=st_val, key=f"st_ch_{idx}", help="Zaznacz, aby zawsze pilnować zapasu")
         
-        # Minimum
-        min_val = c4.number_input("Min", value=wyciagnij_liczbe(row.get('Min_Ilosc', 0)), key=f"st_m_{idx}", label_visibility="collapsed")
-        
-        # Zapis i usuwanie
-        if curr_i != float(row['Ilosc']) or new_st != st_val or min_val != wyciagnij_liczbe(row.get('Min_Ilosc', 0)):
+        # DYNAMIKA: Pole Min pojawia się tylko gdy produkt jest stały
+        min_val = 0.0
+        if new_st:
+            min_val = c4.number_input("Min", value=wyciagnij_liczbe(row.get('Min_Ilosc', 0)), key=f"st_m_{idx}", label_visibility="collapsed")
+        else:
+            c4.write("<p style='color: gray; text-align: center; margin-top: 10px;'>---</p>", unsafe_allow_html=True)
+
+        if curr_i != float(row['Ilosc']) or new_st != st_val or (new_st and min_val != wyciagnij_liczbe(row.get('Min_Ilosc', 0))):
             st.session_state.spizarnia_df.at[idx, 'Ilosc'] = curr_i
             st.session_state.spizarnia_df.at[idx, 'Czy_Stale'] = "TAK" if new_st else "NIE"
-            st.session_state.spizarnia_df.at[idx, 'Min_Ilosc'] = min_val
+            st.session_state.spizarnia_df.at[idx, 'Min_Ilosc'] = min_val if new_st else 0
             save_data(st.session_state.spizarnia_df, "Spizarnia"); st.rerun()
             
         if c5.button("🗑️", key=f"del_s_{idx}"):
@@ -200,7 +183,6 @@ elif st.session_state.page == "Spizarnia":
 elif st.session_state.page == "Dodaj":
     st.header("📖 Baza Przepisów")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
-    # (Logika przepisów)
     with st.expander("➕ Nowa potrawa"):
         with st.form("nr"):
             np = st.text_input("Nazwa")
