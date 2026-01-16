@@ -18,10 +18,15 @@ def get_data(worksheet_name):
         return pd.DataFrame()
 
 def save_data(df, worksheet_name):
-    # Czyścimy puste wiersze przed zapisem
+    # Czyścimy puste wiersze
     df = df.dropna(how='all')
-    conn.update(worksheet=worksheet_name, data=df)
-    st.cache_data.clear()
+    try:
+        # Próbujemy zapisać dane
+        conn.update(worksheet=worksheet_name, data=df)
+        st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Błąd zapisu do zakładki {worksheet_name}. Upewnij się, że arkusz ma uprawnienia Edytora.")
+        st.stop() # Zatrzymuje aplikację, aby nie generować kolejnych błędów
 
 # Załaduj dane do sesji (cache tymczasowy dla szybkości)
 if 'przepisy' not in st.session_state:
