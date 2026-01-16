@@ -60,10 +60,11 @@ def get_data(ws):
     except: return pd.DataFrame()
 
 def save_data(df, ws):
-    if 'Lp.' in df.columns: # Usuwamy Lp przed zapisem do bazy, by nie dublować
-        df = df.drop(columns=['Lp.'])
-    df = df.dropna(how='all')
-    conn.update(worksheet=ws, data=df)
+    # Czyścimy dane: usuwamy kolumnę Lp. i puste wiersze
+    cols_to_save = [c for c in df.columns if c != 'Lp.']
+    df_to_save = df[cols_to_save].dropna(how='all')
+    
+    conn.update(worksheet=ws, data=df_to_save)
     st.cache_data.clear()
 
 # --- 3. INICJALIZACJA ---
@@ -168,20 +169,40 @@ elif st.session_state.page == "Spizarnia":
     st.header("🏠 Twoja Spiżarnia")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
     
+    # Pobieramy aktualne dane
     df_s = st.session_state.spizarnia_df.copy()
+    
+    # Jeśli są puste, tworzymy pusty szablon
     if df_s.empty:
         df_s = pd.DataFrame(columns=['Produkt', 'Ilosc'])
     
-    # Dodawanie automatycznej numeracji Lp.
+    # Usuwamy starą kolumnę Lp. jeśli jakimś cudem tam została
+    if 'Lp.' in df_s.columns:
+        df_s = df_s.drop(columns=['Lp.'])
+    
+    # Generujemy ŚWIEŻE Lp. dla każdego wiersza przed wyświetleniem
     df_s.insert(0, 'Lp.', range(1, len(df_s) + 1))
     
-    st.write("Wpisuj produkty i ich ilości (liczby):")
-    eds = st.data_editor(df_s, num_rows="dynamic", use_container_width=True, hide_index=True)
+    st.write("Wpisz produkty poniżej. Numeracja Lp. zaktualizuje się automatycznie po zapisie.")
+    
+    # Edytor danych - kolumna Lp. jest zablokowana do edycji (disabled)
+    eds = st.data_editor(
+        df_s, 
+        num_rows="dynamic", 
+        use_container_width=True, 
+        hide_index=True,
+        column_config={
+            "Lp.": st.column_config.NumberColumn("Lp.", disabled=True)
+        }
+    )
     
     if st.button("💾 ZAPISZ STAN SPIŻARNI"):
+        # Przy zapisie ignorujemy to co było w Lp. i zapisujemy czyste dane
         save_data(eds, "Spizarnia")
-        st.session_state.spizarnia_df = eds.drop(columns=['Lp.']) if 'Lp.' in eds.columns else eds
-        st.success("Zapisano!")
+        
+        # Odświeżamy stan sesji (pobieramy czyste dane bez Lp.)
+        st.session_state.spizarnia_df = get_data("Spizarnia")
+        st.success("Spiżarnia zaktualizowana! Numery Lp. zostały przeliczone.")
         st.rerun()
 
 elif st.session_state.page == "Dodaj":
