@@ -13,7 +13,7 @@ st.markdown("""
     html, body, [data-testid="stAppViewContainer"] { font-family: 'Sora', sans-serif; }
     .menu-box { background-color: #1E1E1E; border: 1px solid #333333; padding: 25px; border-radius: 15px; text-align: center; margin-bottom: 10px; }
     .today-highlight { background: linear-gradient(90deg, #1B5E20, #2E7D32); padding: 20px; border-radius: 15px; text-align: center; margin-bottom: 30px; border: 1px solid #4CAF50; }
-    .recipe-row { background-color: #1E1E1E; padding: 15px; border-radius: 10px; border: 1px solid #333; margin-bottom: 10px; }
+    .recipe-section { background-color: #1E1E1E; padding: 20px; border-radius: 15px; border: 1px solid #444; margin-top: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -22,8 +22,8 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def wyciagnij_liczbe(tekst):
     if pd.isna(tekst) or tekst == "": return 0
-    match = re.search(r"(\d+[\.,]?\d*)", str(tekst))
-    return float(match.group(1).replace(',', '.')) if match else 0
+    try: return float(str(tekst).replace(',', '.'))
+    except: return 0
 
 def get_data(ws):
     try:
@@ -58,12 +58,11 @@ def analizuj_zapasy():
     plan = st.session_state.plan_df[st.session_state.plan_df['Klucz'].astype(str).str.contains(t_id)]
     for w in plan['Wybor']:
         if w != "Brak":
-            p = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == w]
-            if not p.empty:
-                skladniki_str = str(p.iloc[0]['Skladniki'])
-                for s in skladniki_str.split(','):
-                    nazwa = s.split('(')[0].strip().lower()
-                    potrzeby[nazwa] = potrzeby.get(nazwa, 0) + wyciagnij_liczbe(s)
+            # Szukamy wszystkich wierszy składników dla danej potrawy
+            skladniki = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == w]
+            for _, row in skladniki.iterrows():
+                nazwa = str(row['Skladnik']).lower().strip()
+                potrzeby[nazwa] = potrzeby.get(nazwa, 0) + wyciagnij_liczbe(row['Ilosc'])
     
     mag = {str(r['Produkt']).lower(): wyciagnij_liczbe(r['Ilosc']) for _, r in st.session_state.spizarnia_df.iterrows() if not pd.isna(r['Produkt'])}
     return {n: {"potr": p, "mam": mag.get(n, 0), "brak": max(0, p - mag.get(n, 0))} for n, p in potrzeby.items()}
@@ -84,7 +83,7 @@ if st.session_state.page == "Home":
 elif st.session_state.page == "Plan":
     st.header("📅 Planowanie")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
-    
+    # ... (Reszta kodu Planowania pozostaje bez zmian, bo używa 'Nazwa' potrawy)
     col_prev, col_info, col_next = st.columns([1, 2, 1])
     if col_prev.button("⬅ Poprzedni"): st.session_state.week_offset -= 1; st.rerun()
     dates = get_week_dates(st.session_state.week_offset)
@@ -93,7 +92,6 @@ elif st.session_state.page == "Plan":
     
     with st.expander("📊 ANALIZA SKŁADNIKÓW", expanded=True):
         b = analizuj_zapasy()
-        if not b: st.info("Brak zaplanowanych posiłków.")
         for p, d in b.items():
             st.write(f"**{p.capitalize()}**: {d['mam']}/{d['potr']} " + (f"🔴 Brakuje: {d['brak']}" if d['brak'] > 0 else "🟢 OK"))
 
@@ -103,7 +101,8 @@ elif st.session_state.page == "Plan":
             for typ in ["Śniadanie", "Obiad", "Kolacja"]:
                 k = f"{t_id}_{dni_pl[i]}_{typ}"
                 istn = st.session_state.plan_df[st.session_state.plan_df['Klucz'] == k]['Wybor'].values[0] if not st.session_state.plan_df.empty and k in st.session_state.plan_df['Klucz'].values else "Brak"
-                opcje = ["Brak"] + st.session_state.przepisy['Nazwa'].tolist() if not st.session_state.przepisy.empty else ["Brak"]
+                # Unikalne nazwy potraw do wyboru
+                opcje = ["Brak"] + sorted(st.session_state.przepisy['Nazwa'].unique().tolist()) if not st.session_state.przepisy.empty else ["Brak"]
                 wyb = st.selectbox(f"{typ}:", opcje, index=opcje.index(istn) if istn in opcje else 0, key=k)
                 if wyb != istn:
                     df = st.session_state.plan_df[st.session_state.plan_df['Klucz'] != k]
@@ -140,55 +139,59 @@ elif st.session_state.page == "Dodaj":
     st.header("📖 Baza Przepisów")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
     
-    with st.form("add_recipe"):
-        st.subheader("➕ Nowy przepis")
-        c1, c2 = st.columns([1, 2])
-        n = c1.text_input("Nazwa potrawy")
-        s = c2.text_input("Składniki (np. Jajka (3), Mleko (0.5))")
-        if st.form_submit_button("DODAJ"):
-            if n and s:
-                st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": n, "Skladniki": s}])], ignore_index=True)
-                save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
+    # 1. DODAWANIE NOWEJ POTRAWY
+    with st.expander("➕ Dodaj nową potrawę", expanded=True):
+        with st.form("new_recipe_form"):
+            nazwa_p = st.text_input("Nazwa potrawy (np. Jajecznica)")
+            st.info("Po dodaniu potrawy będziesz mógł dopisać do niej składniki poniżej.")
+            if st.form_submit_button("UTWÓRZ POTRAWĘ"):
+                if nazwa_p:
+                    # Dodajemy pusty wiersz jako placeholder dla potrawy
+                    new_row = pd.DataFrame([{"Nazwa": nazwa_p, "Skladnik": "Wpisz składnik", "Ilosc": 0}])
+                    st.session_state.przepisy = pd.concat([st.session_state.przepisy, new_row], ignore_index=True)
+                    save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
 
+    # 2. EDYCJA SKŁADNIKÓW ISTNIEJĄCEJ POTRAWY
     st.markdown("---")
-    st.subheader("📜 Edytuj bazę przepisów")
-    
-    for idx, row in st.session_state.przepisy.iterrows():
-        with st.container():
-            # Każdy przepis w osobnej sekcji z polami edycyjnymi
-            col_idx, col_name, col_ing, col_actions = st.columns([0.4, 3, 5, 1.2])
+    if not st.session_state.przepisy.empty:
+        potrawy = sorted(st.session_state.przepisy['Nazwa'].unique().tolist())
+        wybrana = st.selectbox("Wybierz potrawę do edycji:", potrawy)
+        
+        st.markdown(f"<div class='recipe-section'>", unsafe_allow_html=True)
+        st.subheader(f"Składniki dla: {wybrana}")
+        
+        # Filtrujemy składniki dla tej potrawy
+        mask = st.session_state.przepisy['Nazwa'] == wybrana
+        skladniki_potrawy = st.session_state.przepisy[mask]
+        
+        for idx, row in skladniki_potrawy.iterrows():
+            c1, c2, c3, c4 = st.columns([3, 1, 0.5, 0.5])
             
-            col_idx.write(f"{idx+1}.")
+            # Edycja nazwy składnika i ilości w oddzielnych polach
+            n_sklad = c1.text_input("Składnik", value=row['Skladnik'], key=f"sn_{idx}", label_visibility="collapsed")
+            i_sklad = c2.number_input("Ilość", value=float(row['Ilosc']), step=0.1, key=f"si_{idx}", label_visibility="collapsed")
             
-            # Edycja nazwy w locie
-            new_n = col_name.text_input("Nazwa", value=row['Nazwa'], key=f"rn_{idx}", label_visibility="collapsed")
-            
-            # Edycja składników w locie
-            new_s = col_ing.text_input("Składniki", value=row['Skladniki'], key=f"rs_{idx}", label_visibility="collapsed")
-            
-            # Przyciski akcji
-            c_save, c_del = col_actions.columns(2)
-            
-            # Jeśli cokolwiek się zmieniło, pokazujemy przycisk zapisu (opcjonalnie można zapisać automatycznie, 
-            # ale przy tekście lepiej mieć kontrolę przyciskiem "Dyskietka")
-            if new_n != row['Nazwa'] or new_s != row['Skladniki']:
-                if c_save.button("💾", key=f"sv_r_{idx}"):
-                    st.session_state.przepisy.at[idx, 'Nazwa'] = new_n
-                    st.session_state.przepisy.at[idx, 'Skladniki'] = new_s
-                    save_data(st.session_state.przepisy, "Przepisy")
-                    st.rerun()
-            else:
-                c_save.write("") # Puste miejsce jeśli brak zmian
-
-            if c_del.button("🗑️", key=f"del_r_{idx}"):
+            if c3.button("💾", key=f"sv_{idx}"):
+                st.session_state.przepisy.at[idx, 'Skladnik'] = n_sklad
+                st.session_state.przepisy.at[idx, 'Ilosc'] = i_sklad
+                save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
+                
+            if c4.button("🗑️", key=f"dl_{idx}"):
                 st.session_state.przepisy = st.session_state.przepisy.drop(idx).reset_index(drop=True)
                 save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
+        
+        if st.button("➕ DODAJ KOLEJNY SKŁADNIK"):
+            new_line = pd.DataFrame([{"Nazwa": wybrana, "Skladnik": "", "Ilosc": 0}])
+            st.session_state.przepisy = pd.concat([st.session_state.przepisy, new_line], ignore_index=True)
+            save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
+            
+        st.markdown("</div>", unsafe_allow_html=True)
 
 elif st.session_state.page == "Zakupy":
     st.header("🛒 Zakupy")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
     b = analizuj_zapasy()
-    braki = {k: v for k, v in b.items() if v['brak'] > 0}
-    if braki:
-        for p, d in braki.items(): st.warning(f"🔸 **{p.capitalize()}**: {d['brak']}")
-    else: st.success("Spiżarnia gotowa! 🎉")
+    if b:
+        for p, d in b.items():
+            if d['brak'] > 0: st.warning(f"🔸 **{p.capitalize()}**: {d['brak']}")
+    else: st.success("Wszystko masz! 🎉")
