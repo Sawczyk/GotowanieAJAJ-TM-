@@ -3,6 +3,7 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime, timedelta
 import re
+import time
 
 # --- 1. KONFIGURACJA UI ---
 st.set_page_config(page_title="Planer Kuchni PRO", page_icon="🍳", layout="wide")
@@ -11,44 +12,50 @@ st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600&display=swap');
     html, body, [data-testid="stAppViewContainer"] { font-family: 'Sora', sans-serif; }
-    .menu-box { background-color: #1E1E1E; border: 1px solid #333333; padding: 25px; border-radius: 15px; text-align: center; margin-bottom: 10px; }
-    .today-highlight { background: linear-gradient(90deg, #1B5E20, #2E7D32); padding: 20px; border-radius: 15px; text-align: center; margin-bottom: 30px; border: 1px solid #4CAF50; }
+    .menu-box { background-color: #1E1E1E; border: 1px solid #333333; padding: 20px; border-radius: 15px; text-align: center; }
+    .today-highlight { background: linear-gradient(90deg, #1B5E20, #2E7D32); padding: 20px; border-radius: 15px; text-align: center; margin-bottom: 25px; border: 1px solid #4CAF50; }
     .recipe-section { background-color: #1E1E1E; padding: 20px; border-radius: 15px; border: 1px solid #444; margin-top: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. POŁĄCZENIE I FUNKCJE ---
+# --- 2. POŁĄCZENIE I FUNKCJE POMOCNICZE ---
 conn = st.connection("gsheets", type=GSheetsConnection)
+
+def wyciagnij_liczbe(tekst):
+    if pd.isna(tekst) or tekst == "": return 0.0
+    try:
+        return float(str(tekst).replace(',', '.'))
+    except:
+        return 0.0
 
 def get_data(ws):
     try:
         df = conn.read(worksheet=ws, ttl=0)
-        df = df.dropna(how='all').reset_index(drop=True)
-        return df
+        return df.dropna(how='all').reset_index(drop=True)
     except:
         return pd.DataFrame()
 
 def save_data(df, ws):
-    conn.update(worksheet=ws, data=df)
-    st.cache_data.clear()
+    try:
+        df_to_save = df.dropna(how='all')
+        conn.update(worksheet=ws, data=df_to_save)
+        st.cache_data.clear()
+        st.toast(f"💾 Zapisano w {ws}")
+        time.sleep(0.4)
+        return True
+    except Exception as e:
+        st.error(f"⚠️ Błąd zapisu: {e}")
+        return False
 
-# --- 3. INICJALIZACJA STANU ---
+# --- 3. INICJALIZACJA I ANALIZA ZAPASÓW ---
 if 'page' not in st.session_state: st.session_state.page = "Home"
 if 'week_offset' not in st.session_state: st.session_state.week_offset = 0
 
-# Bezpieczne ładowanie danych
+# Ładowanie danych
 st.session_state.przepisy = get_data("Przepisy")
 st.session_state.spizarnia_df = get_data("Spizarnia")
 st.session_state.plan_df = get_data("Plan")
-
-# Upewnienie się, że kolumny istnieją (naprawa KeyError)
-if not st.session_state.przepisy.empty:
-    if 'Skladnik' not in st.session_state.przepisy.columns:
-        st.session_state.przepisy['Skladnik'] = ""
-    if 'Ilosc' not in st.session_state.przepisy.columns:
-        st.session_state.przepisy['Ilosc'] = 0
-
-dni_pl = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
+st.session_state.stale_df = get_data("Stale")
 
 def get_week_dates(offset):
     today = datetime.now()
@@ -57,52 +64,62 @@ def get_week_dates(offset):
 
 def analizuj_zapasy():
     potrzeby = {}
+    
+    # 1. Z planu posiłków
     dates = get_week_dates(st.session_state.week_offset)
     t_id = dates[0].strftime("%Y-%V")
-    if st.session_state.plan_df.empty: return {}
+    if not st.session_state.plan_df.empty:
+        plan_tydzien = st.session_state.plan_df[st.session_state.plan_df['Klucz'].astype(str).str.contains(t_id)]
+        for wybrana_potrawa in plan_tydzien['Wybor']:
+            if wybrana_potrawa != "Brak":
+                skladniki = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == wybrana_potrawa]
+                for _, row in skladniki.iterrows():
+                    nazwa = str(row.get('Skladnik', '')).lower().strip()
+                    if nazwa:
+                        potrzeby[nazwa] = potrzeby.get(nazwa, 0) + wyciagnij_liczbe(row.get('Ilosc', 0))
+
+    # 2. Ze stałych produktów (Minimum)
+    if not st.session_state.stale_df.empty:
+        for _, row in st.session_state.stale_df.iterrows():
+            nazwa = str(row.get('Produkt', '')).lower().strip()
+            if nazwa:
+                mini = wyciagnij_liczbe(row.get('Minimum', 0))
+                potrzeby[nazwa] = max(potrzeby.get(nazwa, 0), mini)
+
+    # 3. Porównanie ze spiżarnią
+    magazyn = {str(r['Produkt']).lower(): wyciagnij_liczbe(r['Ilosc']) 
+               for _, r in st.session_state.spizarnia_df.iterrows() if not pd.isna(r['Produkt'])}
     
-    plan = st.session_state.plan_df[st.session_state.plan_df['Klucz'].astype(str).str.contains(t_id)]
-    for w in plan['Wybor']:
-        if w != "Brak":
-            skladniki = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == w]
-            for _, row in skladniki.iterrows():
-                nazwa = str(row.get('Skladnik', '')).lower().strip()
-                if nazwa:
-                    try:
-                        ilosc = float(str(row.get('Ilosc', 0)).replace(',', '.'))
-                        potrzeby[nazwa] = potrzeby.get(nazwa, 0) + ilosc
-                    except: pass
-    
-    mag = {str(r['Produkt']).lower(): float(str(r['Ilosc']).replace(',', '.')) 
-           for _, r in st.session_state.spizarnia_df.iterrows() if not pd.isna(r['Produkt'])}
-    return {n: {"potr": p, "mam": mag.get(n, 0), "brak": max(0, p - mag.get(n, 0))} for n, p in potrzeby.items()}
+    wynik = {}
+    for n, p in potrzeby.items():
+        wynik[n] = {"potr": p, "mam": magazyn.get(n, 0), "brak": max(0, p - magazyn.get(n, 0))}
+    return wynik
 
 # --- 4. LOGIKA STRON ---
+dni_pl = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
+
 if st.session_state.page == "Home":
     teraz = datetime.now()
-    st.markdown(f"<div class='today-highlight'><h1 style='margin:0; color:white;'>{dni_pl[teraz.weekday()]}</h1><p style='margin:0; color:white;'>{teraz.strftime('%d.%m.%Y')}</p></div>", unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns(4)
-    pages = [("PLANOWANIE", "Plan", "📅"), ("SPIŻARNIA", "Spizarnia", "🏠"), ("PRZEPISY", "Dodaj", "📖"), ("ZAKUPY", "Zakupy", "🛒")]
-    for i, (label, pg, icon) in enumerate(pages):
-        with [c1, c2, c3, c4][i]:
-            st.markdown(f"<div class='menu-box'>{icon}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='today-highlight'><h1>{dni_pl[teraz.weekday()]}</h1><p>{teraz.strftime('%d.%m.%Y')}</p></div>", unsafe_allow_html=True)
+    
+    c1, c2, c3, c4, c5 = st.columns(5)
+    p_config = [("PLAN", "Plan", "📅"), ("SPIŻARNIA", "Spizarnia", "🏠"), ("PRZEPISY", "Dodaj", "📖"), ("ZAKUPY", "Zakupy", "🛒"), ("STAŁE", "Stale", "📌")]
+    
+    for i, (label, pg, icon) in enumerate(p_config):
+        with [c1, c2, c3, c4, c5][i]:
+            st.markdown(f"<div class='menu-box'><h1>{icon}</h1></div>", unsafe_allow_html=True)
             if st.button(label, key=f"btn_{pg}", use_container_width=True): 
                 st.session_state.page = pg; st.rerun()
 
 elif st.session_state.page == "Plan":
-    st.header("📅 Planowanie")
+    st.header("📅 Planowanie Tygodnia")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
-    # (Logika planowania pozostaje spójna)
-    col_prev, col_info, col_next = st.columns([1, 2, 1])
-    if col_prev.button("⬅ Poprzedni"): st.session_state.week_offset -= 1; st.rerun()
-    dates = get_week_dates(st.session_state.week_offset)
-    col_info.markdown(f"<h3 style='text-align:center;'>{dates[0].strftime('%d.%m')} - {dates[-1].strftime('%d.%m')}</h3>", unsafe_allow_html=True)
-    if col_next.button("Następny ➡"): st.session_state.week_offset += 1; st.rerun()
     
-    with st.expander("📊 CZY MASZ WSZYSTKO?", expanded=True):
-        b = analizuj_zapasy()
-        for p, d in b.items():
-            st.write(f"**{p.capitalize()}**: {d['mam']}/{d['potr']} " + (f"🔴 Brak: {d['brak']}" if d['brak'] > 0 else "🟢 OK"))
+    cp, ci, cn = st.columns([1, 2, 1])
+    if cp.button("⬅ Poprzedni"): st.session_state.week_offset -= 1; st.rerun()
+    dates = get_week_dates(st.session_state.week_offset)
+    ci.markdown(f"<h3 style='text-align:center;'>{dates[0].strftime('%d.%m')} - {dates[-1].strftime('%d.%m')}</h3>", unsafe_allow_html=True)
+    if cn.button("Następny ➡"): st.session_state.week_offset += 1; st.rerun()
 
     t_id = dates[0].strftime("%Y-%V")
     for i, d_obj in enumerate(dates):
@@ -118,27 +135,26 @@ elif st.session_state.page == "Plan":
                     save_data(st.session_state.plan_df, "Plan"); st.rerun()
 
 elif st.session_state.page == "Spizarnia":
-    st.header("🏠 Spiżarnia")
+    st.header("🏠 Twoja Spiżarnia")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
-    with st.form("add_stock"):
+    
+    with st.form("add_s"):
         c1, c2, c3 = st.columns([3, 1, 1])
-        new_p = c1.text_input("Produkt")
-        new_i = c2.number_input("Ilość", min_value=0.0, step=0.1)
+        np = c1.text_input("Produkt")
+        ni = c2.number_input("Ilość", min_value=0.0, step=0.1)
         if c3.form_submit_button("➕ DODAJ"):
-            if new_p:
-                st.session_state.spizarnia_df = pd.concat([st.session_state.spizarnia_df, pd.DataFrame([{"Produkt": new_p, "Ilosc": new_i}])], ignore_index=True)
+            if np:
+                st.session_state.spizarnia_df = pd.concat([st.session_state.spizarnia_df, pd.DataFrame([{"Produkt": np, "Ilosc": ni}])], ignore_index=True)
                 save_data(st.session_state.spizarnia_df, "Spizarnia"); st.rerun()
 
-    st.markdown("---")
     for idx, row in st.session_state.spizarnia_df.iterrows():
-        c1, c2, c3, c4 = st.columns([0.5, 3, 1.5, 0.5])
-        c1.write(f"{idx+1}.")
-        c2.write(f"**{row['Produkt']}**")
-        edited_qty = c3.number_input("Ilość", value=float(row['Ilosc']), step=0.1, key=f"q_{idx}", label_visibility="collapsed")
-        if edited_qty != float(row['Ilosc']):
-            st.session_state.spizarnia_df.at[idx, 'Ilosc'] = edited_qty
+        c1, c2, c3 = st.columns([3, 1, 0.5])
+        c1.write(f"**{row['Produkt']}**")
+        val = c2.number_input("Ilość", value=float(row['Ilosc']), key=f"sq_{idx}", label_visibility="collapsed")
+        if val != float(row['Ilosc']):
+            st.session_state.spizarnia_df.at[idx, 'Ilosc'] = val
             save_data(st.session_state.spizarnia_df, "Spizarnia"); st.rerun()
-        if c4.button("🗑️", key=f"del_s_{idx}"):
+        if c3.button("🗑️", key=f"sd_{idx}"):
             st.session_state.spizarnia_df = st.session_state.spizarnia_df.drop(idx).reset_index(drop=True)
             save_data(st.session_state.spizarnia_df, "Spizarnia"); st.rerun()
 
@@ -147,52 +163,65 @@ elif st.session_state.page == "Dodaj":
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
     
     with st.expander("➕ Utwórz nową potrawę"):
-        with st.form("new_recipe"):
-            nazwa_p = st.text_input("Nazwa potrawy")
+        with st.form("nr"):
+            n_potr = st.text_input("Nazwa potrawy")
             if st.form_submit_button("STWÓRZ"):
-                if nazwa_p:
-                    new_row = pd.DataFrame([{"Nazwa": nazwa_p, "Skladnik": "Nowy składnik", "Ilosc": 0}])
-                    st.session_state.przepisy = pd.concat([st.session_state.przepisy, new_row], ignore_index=True)
+                if n_potr:
+                    new = pd.DataFrame([{"Nazwa": n_potr, "Skladnik": "Składnik 1", "Ilosc": 0}])
+                    st.session_state.przepisy = pd.concat([st.session_state.przepisy, new], ignore_index=True)
                     save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
 
-    st.markdown("---")
     if not st.session_state.przepisy.empty:
-        potrawy = sorted(st.session_state.przepisy['Nazwa'].unique().tolist())
-        wybrana = st.selectbox("Wybierz potrawę do edycji:", potrawy)
-        
+        wyb = st.selectbox("Wybierz potrawę do edycji:", sorted(st.session_state.przepisy['Nazwa'].unique().tolist()))
         st.markdown("<div class='recipe-section'>", unsafe_allow_html=True)
-        # Filtrowanie bezpieczne (używamy .get dla pewności)
-        mask = st.session_state.przepisy['Nazwa'] == wybrana
-        skladniki_potrawy = st.session_state.przepisy[mask]
-        
-        for idx, row in skladniki_potrawy.iterrows():
+        skladniki = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == wyb]
+        for idx, row in skladniki.iterrows():
             c1, c2, c3, c4 = st.columns([3, 1, 0.5, 0.5])
-            val_s = row.get('Skladnik', '')
-            val_i = float(row.get('Ilosc', 0))
-            
-            new_s = c1.text_input("Składnik", value=val_s, key=f"sn_{idx}", label_visibility="collapsed")
-            new_i = c2.number_input("Ilość", value=val_i, step=0.1, key=f"si_{idx}", label_visibility="collapsed")
-            
+            ns = c1.text_input("Składnik", row['Skladnik'], key=f"sn_{idx}", label_visibility="collapsed")
+            ni = c2.number_input("Ilość", float(row['Ilosc']), key=f"si_{idx}", label_visibility="collapsed")
             if c3.button("💾", key=f"sv_{idx}"):
-                st.session_state.przepisy.at[idx, 'Skladnik'] = new_s
-                st.session_state.przepisy.at[idx, 'Ilosc'] = new_i
+                st.session_state.przepisy.at[idx, 'Skladnik'] = ns
+                st.session_state.przepisy.at[idx, 'Ilosc'] = ni
                 save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
-                
-            if c4.button("🗑️", key=f"dl_{idx}"):
+            if c4.button("🗑️", key=f"rd_{idx}"):
                 st.session_state.przepisy = st.session_state.przepisy.drop(idx).reset_index(drop=True)
                 save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
-        
-        if st.button("➕ DODAJ KOLEJNY SKŁADNIK"):
-            new_line = pd.DataFrame([{"Nazwa": wybrana, "Skladnik": "", "Ilosc": 0}])
-            st.session_state.przepisy = pd.concat([st.session_state.przepisy, new_line], ignore_index=True)
+        if st.button("➕ Dodaj kolejny składnik"):
+            st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": wyb, "Skladnik": "", "Ilosc": 0}])], ignore_index=True)
             save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
-elif st.session_state.page == "Zakupy":
-    st.header("🛒 Zakupy")
+elif st.session_state.page == "Stale":
+    st.header("📌 Stałe Produkty (Minimum)")
+    st.info("Produkty tutaj wpisane będą zawsze pilnowane. Jeśli w spiżarni będzie ich mniej niż 'Min', trafią na listę zakupów.")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
-    b = analizuj_zapasy()
-    braki = {k: v for k, v in b.items() if v['brak'] > 0}
+    with st.form("add_st"):
+        c1, c2, c3 = st.columns([3, 1, 1])
+        pn = c1.text_input("Produkt")
+        pm = c2.number_input("Min. ilość", min_value=0.0)
+        if c3.form_submit_button("➕"):
+            if pn:
+                st.session_state.stale_df = pd.concat([st.session_state.stale_df, pd.DataFrame([{"Produkt": pn, "Minimum": pm}])], ignore_index=True)
+                save_data(st.session_state.stale_df, "Stale"); st.rerun()
+    for idx, row in st.session_state.stale_df.iterrows():
+        c1, c2, c3 = st.columns([3, 1, 0.5])
+        c1.write(f"**{row['Produkt']}**")
+        ed_m = c2.number_input("Min", value=float(row['Minimum']), key=f"stm_{idx}", label_visibility="collapsed")
+        if ed_m != float(row['Minimum']):
+            st.session_state.stale_df.at[idx, 'Minimum'] = ed_m
+            save_data(st.session_state.stale_df, "Stale"); st.rerun()
+        if c3.button("🗑️", key=f"std_{idx}"):
+            st.session_state.stale_df = st.session_state.stale_df.drop(idx).reset_index(drop=True)
+            save_data(st.session_state.stale_df, "Stale"); st.rerun()
+
+elif st.session_state.page == "Zakupy":
+    st.header("🛒 Lista Zakupów")
+    if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
+    analiza = analizuj_zapasy()
+    braki = {k: v for k, v in analiza.items() if v['brak'] > 0}
     if braki:
-        for p, d in braki.items(): st.warning(f"🔸 **{p.capitalize()}**: {d['brak']}")
-    else: st.success("Spiżarnia gotowa! 🎉")
+        st.write("Musisz kupić poniższe produkty, aby zrealizować plan i utrzymać stan stały:")
+        for p, d in braki.items():
+            st.warning(f"🔸 **{p.capitalize()}**: potrzebujesz jeszcze **{d['brak']}** (masz: {d['mam']}, wymagane: {d['potr']})")
+    else:
+        st.success("Wszystko masz! Twoja spiżarnia i plan są zgodne. 🎉")
