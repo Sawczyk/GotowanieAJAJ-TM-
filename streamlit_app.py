@@ -33,15 +33,6 @@ st.markdown("""
         margin-bottom: 30px;
         border: 1px solid #4CAF50;
     }
-    .nav-bar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        background-color: #262626;
-        padding: 10px 20px;
-        border-radius: 10px;
-        margin-bottom: 20px;
-    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -60,10 +51,8 @@ def get_data(ws):
     except: return pd.DataFrame()
 
 def save_data(df, ws):
-    # Czyścimy dane: usuwamy kolumnę Lp. i puste wiersze
-    cols_to_save = [c for c in df.columns if c != 'Lp.']
-    df_to_save = df[cols_to_save].dropna(how='all')
-    
+    # Czyścimy dane przed zapisem (tylko Produkt i Ilosc)
+    df_to_save = df[['Produkt', 'Ilosc']].dropna(subset=['Produkt'])
     conn.update(worksheet=ws, data=df_to_save)
     st.cache_data.clear()
 
@@ -97,10 +86,10 @@ def analizuj_zapasy():
                     nazwa = s.split('(')[0].strip().lower()
                     potrzeby[nazwa] = potrzeby.get(nazwa, 0) + wyciagnij_liczbe(s)
     
-    mag = {str(r['Produkt']).lower(): wyciagnij_liczbe(r['Ilosc']) for _, r in st.session_state.spizarnia_df.iterrows()} if not st.session_state.spizarnia_df.empty else {}
+    mag = {str(r['Produkt']).lower(): wyciagnij_liczbe(r['Ilosc']) for _, r in st.session_state.spizarnia_df.iterrows() if not pd.isna(r['Produkt'])}
     return {n: {"potr": p, "mam": mag.get(n, 0), "brak": max(0, p - mag.get(n, 0))} for n, p in potrzeby.items()}
 
-# --- 4. NAWIGACJA ---
+# --- 4. NAWIGACJA HOME ---
 if st.session_state.page == "Home":
     teraz = datetime.now()
     dzien_dzis = dni_pl[teraz.weekday()]
@@ -125,12 +114,12 @@ if st.session_state.page == "Home":
         st.markdown("<div class='menu-box'>🛒</div>", unsafe_allow_html=True)
         if st.button("ZAKUPY", use_container_width=True): st.session_state.page = "Zakupy"; st.rerun()
 
+# --- 5. MODUŁ: PLANOWANIE ---
 elif st.session_state.page == "Plan":
     st.header("📅 Planowanie Tygodnia")
-    if st.button("⬅ POWRÓT DO MENU"): st.session_state.page = "Home"; st.rerun()
+    if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
     
     st.markdown("---")
-    # Nowy pasek nawigacji tygodniem
     col_prev, col_info, col_next = st.columns([1, 2, 1])
     if col_prev.button("⬅ Poprzedni Tydzień", use_container_width=True): st.session_state.week_offset -= 1; st.rerun()
     
@@ -165,46 +154,36 @@ elif st.session_state.page == "Plan":
                     st.session_state.plan_df = df
                     save_data(df, "Plan"); st.rerun()
 
+# --- 6. MODUŁ: SPIŻARNIA (NAPRAWIONA NUMERACJA) ---
 elif st.session_state.page == "Spizarnia":
     st.header("🏠 Twoja Spiżarnia")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
     
-    # Pobieramy aktualne dane
-    df_s = st.session_state.spizarnia_df.copy()
+    # Przygotowanie danych (tylko Produkt i Ilosc)
+    df_s = st.session_state.spizarnia_df[['Produkt', 'Ilosc']].copy() if not st.session_state.spizarnia_df.empty else pd.DataFrame(columns=['Produkt', 'Ilosc'])
     
-    # Jeśli są puste, tworzymy pusty szablon
-    if df_s.empty:
-        df_s = pd.DataFrame(columns=['Produkt', 'Ilosc'])
+    st.info("Wskazówka: Aby dodać produkt, wpisz nazwę w ostatnim wierszu. Numeracja po lewej (0, 1, 2...) jest automatyczna.")
     
-    # Usuwamy starą kolumnę Lp. jeśli jakimś cudem tam została
-    if 'Lp.' in df_s.columns:
-        df_s = df_s.drop(columns=['Lp.'])
-    
-    # Generujemy ŚWIEŻE Lp. dla każdego wiersza przed wyświetleniem
-    df_s.insert(0, 'Lp.', range(1, len(df_s) + 1))
-    
-    st.write("Wpisz produkty poniżej. Numeracja Lp. zaktualizuje się automatycznie po zapisie.")
-    
-    # Edytor danych - kolumna Lp. jest zablokowana do edycji (disabled)
+    # Edytor bez kolumny Lp - używamy wbudowanego indeksu Streamlit, który sam numeruje wiersze!
     eds = st.data_editor(
         df_s, 
         num_rows="dynamic", 
-        use_container_width=True, 
-        hide_index=True,
+        use_container_width=True,
         column_config={
-            "Lp.": st.column_config.NumberColumn("Lp.", disabled=True)
+            "Produkt": st.column_config.TextColumn("Produkt", placeholder="Wpisz nazwę..."),
+            "Ilosc": st.column_config.NumberColumn("Ilość", placeholder="Wpisz liczbę...")
         }
     )
     
     if st.button("💾 ZAPISZ STAN SPIŻARNI"):
-        # Przy zapisie ignorujemy to co było w Lp. i zapisujemy czyste dane
+        # Zapisujemy do bazy
         save_data(eds, "Spizarnia")
-        
-        # Odświeżamy stan sesji (pobieramy czyste dane bez Lp.)
-        st.session_state.spizarnia_df = get_data("Spizarnia")
-        st.success("Spiżarnia zaktualizowana! Numery Lp. zostały przeliczone.")
+        # Odświeżamy sesję
+        st.session_state.spizarnia_df = eds
+        st.success("Spiżarnia zaktualizowana!")
         st.rerun()
 
+# --- 7. MODUŁ: PRZEPISY ---
 elif st.session_state.page == "Dodaj":
     st.header("📖 Baza Przepisów")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
@@ -214,19 +193,21 @@ elif st.session_state.page == "Dodaj":
         s = st.text_area("Składniki (np. Jajka (3), Mleko (0.5))")
         if st.form_submit_button("DODAJ PRZEPIS"):
             if n and s:
-                new_recipe = pd.DataFrame([{"Nazwa": n, "Typ": t, "Skladniki": s}])
-                st.session_state.przepisy = pd.concat([st.session_state.przepisy, new_recipe], ignore_index=True)
+                new_rec = pd.DataFrame([{"Nazwa": n, "Typ": t, "Skladniki": s}])
+                st.session_state.przepisy = pd.concat([st.session_state.przepisy, new_rec], ignore_index=True)
                 save_data(st.session_state.przepisy, "Przepisy")
                 st.success(f"Dodano: {n}")
                 st.rerun()
 
+# --- 8. MODUŁ: ZAKUPY ---
 elif st.session_state.page == "Zakupy":
     st.header("🛒 Lista Zakupów")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
     b = analizuj_zapasy()
     braki = {k: v for k, v in b.items() if v['brak'] > 0}
     if braki:
+        st.write("Produkty do kupienia:")
         for p, d in braki.items():
             st.warning(f"🔸 **{p.capitalize()}**: dokup {d['brak']}")
     else:
-        st.success("Spiżarnia pełna! 🎉")
+        st.success("Spiżarnia pełna na ten tydzień! 🎉")
