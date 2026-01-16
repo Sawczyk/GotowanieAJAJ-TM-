@@ -14,6 +14,7 @@ st.markdown("""
     .menu-box { background-color: #1E1E1E; border: 1px solid #333333; padding: 25px; border-radius: 15px; text-align: center; margin-bottom: 10px; }
     .today-highlight { background: linear-gradient(90deg, #1B5E20, #2E7D32); padding: 20px; border-radius: 15px; text-align: center; margin-bottom: 30px; border: 1px solid #4CAF50; }
     .recipe-card { background-color: #262626; padding: 15px; border-radius: 10px; border-left: 5px solid #4CAF50; margin-bottom: 10px; }
+    .edit-box { background-color: #333; padding: 15px; border-radius: 10px; margin-bottom: 10px; border: 1px solid #ffaa00; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -35,21 +36,13 @@ def save_data(df, ws):
     conn.update(worksheet=ws, data=df)
     st.cache_data.clear()
 
-# --- 3. INICJALIZACJA STANU (KRYTYCZNA KOLEJNOŚĆ) ---
-if 'page' not in st.session_state: 
-    st.session_state.page = "Home"
-
-if 'week_offset' not in st.session_state: 
-    st.session_state.week_offset = 0
-
-if 'przepisy' not in st.session_state: 
-    st.session_state.przepisy = get_data("Przepisy")
-
-if 'spizarnia_df' not in st.session_state: 
-    st.session_state.spizarnia_df = get_data("Spizarnia")
-
-if 'plan_df' not in st.session_state: 
-    st.session_state.plan_df = get_data("Plan")
+# --- 3. INICJALIZACJA STANU ---
+if 'page' not in st.session_state: st.session_state.page = "Home"
+if 'week_offset' not in st.session_state: st.session_state.week_offset = 0
+if 'przepisy' not in st.session_state: st.session_state.przepisy = get_data("Przepisy")
+if 'spizarnia_df' not in st.session_state: st.session_state.spizarnia_df = get_data("Spizarnia")
+if 'plan_df' not in st.session_state: st.session_state.plan_df = get_data("Plan")
+if 'editing_recipe' not in st.session_state: st.session_state.editing_recipe = None
 
 dni_pl = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
 
@@ -76,7 +69,6 @@ def analizuj_zapasy():
     
     mag = {str(r['Produkt']).lower(): wyciagnij_liczbe(r['Ilosc']) for _, r in st.session_state.spizarnia_df.iterrows() if not pd.isna(r['Produkt'])}
     return {n: {"potr": p, "mam": mag.get(n, 0), "brak": max(0, p - mag.get(n, 0))} for n, p in potrzeby.items()}
-
 
 # --- 4. LOGIKA STRON ---
 if st.session_state.page == "Home":
@@ -149,20 +141,48 @@ elif st.session_state.page == "Spizarnia":
 elif st.session_state.page == "Dodaj":
     st.header("📖 Przepisy")
     if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
+    
+    # Formularz dodawania
     with st.form("add_recipe"):
-        n = st.text_input("Nazwa")
+        st.subheader("➕ Dodaj nowy przepis")
+        n = st.text_input("Nazwa potrawy")
         s = st.text_area("Składniki (np. Jajka (3), Mleko (0.5))")
-        if st.form_submit_button("➕ DODAJ"):
+        if st.form_submit_button("DODAJ DO BAZY"):
             if n and s:
                 st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": n, "Skladniki": s}])], ignore_index=True)
                 save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
 
     st.markdown("---")
+    st.subheader("📜 Twoja baza przepisów")
+    
     for idx, row in st.session_state.przepisy.iterrows():
-        st.markdown(f"<div class='recipe-card'><b>{idx+1}. {row['Nazwa']}</b><br>{row['Skladniki']}</div>", unsafe_allow_html=True)
-        if st.button(f"Usuń {row['Nazwa']}", key=f"dr_{idx}"):
-            st.session_state.przepisy = st.session_state.przepisy.drop(idx).reset_index(drop=True)
-            save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
+        # Sprawdzamy, czy ten przepis jest właśnie edytowany
+        if st.session_state.editing_recipe == idx:
+            with st.container():
+                st.markdown("<div class='edit-box'>", unsafe_allow_html=True)
+                new_name = st.text_input("Edytuj nazwę", value=row['Nazwa'], key=f"edit_n_{idx}")
+                new_ingredients = st.text_area("Edytuj składniki", value=row['Skladniki'], key=f"edit_s_{idx}")
+                col_e1, col_e2 = st.columns(2)
+                if col_e1.button("💾 ZAPISZ", key=f"save_r_{idx}"):
+                    st.session_state.przepisy.at[idx, 'Nazwa'] = new_name
+                    st.session_state.przepisy.at[idx, 'Skladniki'] = new_ingredients
+                    save_data(st.session_state.przepisy, "Przepisy")
+                    st.session_state.editing_recipe = None
+                    st.rerun()
+                if col_e2.button("❌ ANULUJ", key=f"canc_r_{idx}"):
+                    st.session_state.editing_recipe = None
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            # Standardowy widok karty
+            st.markdown(f"<div class='recipe-card'><b>{idx+1}. {row['Nazwa']}</b><br>{row['Skladniki']}</div>", unsafe_allow_html=True)
+            col_b1, col_b2 = st.columns([1, 5])
+            if col_b1.button("✏️ EDYTUJ", key=f"edit_btn_{idx}"):
+                st.session_state.editing_recipe = idx
+                st.rerun()
+            if col_b2.button(f"🗑️ USUŃ {row['Nazwa']}", key=f"dr_{idx}"):
+                st.session_state.przepisy = st.session_state.przepisy.drop(idx).reset_index(drop=True)
+                save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
 
 elif st.session_state.page == "Zakupy":
     st.header("🛒 Zakupy")
@@ -171,4 +191,4 @@ elif st.session_state.page == "Zakupy":
     braki = {k: v for k, v in b.items() if v['brak'] > 0}
     if braki:
         for p, d in braki.items(): st.warning(f"🔸 **{p.capitalize()}**: {d['brak']}")
-    else: st.success("Wszystko masz! 🎉")
+    else: st.success("Spiżarnia gotowa! 🎉")
