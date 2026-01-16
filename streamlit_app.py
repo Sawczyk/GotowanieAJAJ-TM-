@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import time
 
-# --- 1. POWRÓT DO ORYGINALNEGO UI ---
+# --- 1. POWRÓT DO ULUBIONEGO UI Z POPRAWIONYM KLIKANIEM ---
 st.set_page_config(page_title="Planer Kuchni PRO", page_icon="🍳", layout="wide")
 
 st.markdown("""
@@ -12,14 +12,7 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600&display=swap');
     html, body, [data-testid="stAppViewContainer"] { font-family: 'Sora', sans-serif; }
     
-    .menu-box { 
-        background-color: #1E1E1E; 
-        border: 1px solid #333333; 
-        padding: 25px; 
-        border-radius: 15px; 
-        text-align: center; 
-    }
-    
+    /* Nagłówek dnia */
     .today-highlight { 
         background: linear-gradient(90deg, #1B5E20, #2E7D32); 
         padding: 20px; 
@@ -28,22 +21,43 @@ st.markdown("""
         margin-bottom: 25px; 
         border: 1px solid #4CAF50; 
     }
+
+    /* DUŻE PRZYCISKI KAFELKOWE */
+    div.stButton > button {
+        background-color: #1E1E1E !important;
+        border: 1px solid #333333 !important;
+        border-radius: 15px !important;
+        height: 150px !important;  /* Wysokość kafelka */
+        color: white !important;
+        font-size: 1.2rem !important;
+        font-weight: 600 !important;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+    }
+
+    div.stButton > button:hover {
+        border-color: #2E7D32 !important;
+        background-color: #262626 !important;
+        transform: translateY(-2px);
+    }
+
+    /* Specjalny styl dla zielonego zapisu w przepisach */
+    div.stButton > button[kind="primary"] {
+        background-color: #2E7D32 !important;
+        height: 50px !important;
+        margin-top: 10px;
+    }
     
+    /* Sekcja edycji */
     .recipe-section { 
         background-color: #1E1E1E; 
         padding: 20px; 
         border-radius: 15px; 
         border: 1px solid #444; 
     }
-
-    /* Wyłącznie zielony przycisk zapisu */
-    div.stButton > button[kind="primary"] {
-        background-color: #2E7D32 !important;
-        color: white !important;
-        font-weight: bold !important;
-    }
-    
-    .stButton button { width: 100%; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -53,11 +67,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def get_data(ws):
     try:
         df = conn.read(worksheet=ws, ttl=0)
-        if df is None or df.empty:
-            if ws == "Spizarnia": return pd.DataFrame(columns=["Produkt", "Ilosc", "Czy_Stale", "Min_Ilosc"])
-            if ws == "Przepisy": return pd.DataFrame(columns=["Nazwa", "Skladnik", "Ilosc"])
-            if ws == "Plan": return pd.DataFrame(columns=["Klucz", "Wybor"])
-        return df.dropna(how='all').reset_index(drop=True)
+        return df.dropna(how='all').reset_index(drop=True) if df is not None else pd.DataFrame()
     except: return pd.DataFrame()
 
 def save_data(df, ws):
@@ -116,20 +126,20 @@ def analizuj_zapasy():
 
 if st.session_state.page == "Home":
     st.markdown(f"<div class='today-highlight'><h1>{dni_pl[datetime.now().weekday()]}</h1></div>", unsafe_allow_html=True)
+    
     c1, c2, c3, c4 = st.columns(4)
-    p_config = [("PLAN", "Plan", "📅"), ("SPIŻARNIA", "Spizarnia", "🏠"), ("PRZEPISY", "Dodaj", "📖"), ("ZAKUPY", "Zakupy", "🛒")]
-    for i, (label, pg, icon) in enumerate(p_config):
-        with [c1, c2, c3, c4][i]:
-            st.markdown(f"<div class='menu-box'><h1>{icon}</h1></div>", unsafe_allow_html=True)
-            if st.button(label, key=f"btn_{pg}"): 
-                st.session_state.page = pg; st.rerun()
+    # Ikona jest częścią etykiety przycisku, co sprawia że cały obszar jest klikalny
+    if c1.button("📅\n\nPLAN", key="b1"): st.session_state.page = "Plan"; st.rerun()
+    if c2.button("🏠\n\nSPIŻARNIA", key="b2"): st.session_state.page = "Spizarnia"; st.rerun()
+    if c3.button("📖\n\nPRZEPISY", key="b3"): st.session_state.page = "Dodaj"; st.rerun()
+    if c4.button("🛒\n\nZAKUPY", key="b4"): st.session_state.page = "Zakupy"; st.rerun()
 
 elif st.session_state.page == "Plan":
     st.header("📅 Plan Posiłków")
-    if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
+    if st.button("⬅ POWRÓT", key="back"): st.session_state.page = "Home"; st.rerun()
     cp, ci, cn = st.columns([1, 2, 1])
-    if cp.button("⬅"): st.session_state.week_offset -= 1; st.rerun()
-    if cn.button("➡"): st.session_state.week_offset += 1; st.rerun()
+    if cp.button("⬅", key="prev"): st.session_state.week_offset -= 1; st.rerun()
+    if cn.button("➡", key="next"): st.session_state.week_offset += 1; st.rerun()
     start = datetime.now() - timedelta(days=datetime.now().weekday()) + timedelta(weeks=st.session_state.week_offset)
     t_id = start.strftime("%Y-%V")
     for i, d_n in enumerate(dni_pl):
@@ -146,11 +156,11 @@ elif st.session_state.page == "Plan":
 
 elif st.session_state.page == "Spizarnia":
     st.header("🏠 Spiżarnia")
-    if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
+    if st.button("⬅ POWRÓT", key="back"): st.session_state.page = "Home"; st.rerun()
     with st.form("add_s"):
         c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
         n, q, s, m = c1.text_input("Produkt"), c2.number_input("Ilość", 0.0), c3.checkbox("Stały?"), c4.number_input("Min", 0.0)
-        if st.form_submit_button("Dodaj"):
+        if st.form_submit_button("Dodaj produkt"):
             st.session_state.spizarnia_df = pd.concat([st.session_state.spizarnia_df, pd.DataFrame([{"Produkt": n, "Ilosc": q, "Czy_Stale": "TAK" if s else "NIE", "Min_Ilosc": m}])], ignore_index=True)
             save_data(st.session_state.spizarnia_df, "Spizarnia"); st.rerun()
     for idx, row in st.session_state.spizarnia_df.iterrows():
@@ -170,10 +180,10 @@ elif st.session_state.page == "Spizarnia":
 
 elif st.session_state.page == "Dodaj":
     st.header("📖 Przepisy")
-    if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
+    if st.button("⬅ POWRÓT", key="back"): st.session_state.page = "Home"; st.rerun()
     with st.expander("➕ Nowa potrawa"):
         np = st.text_input("Nazwa")
-        if st.button("Stwórz"):
+        if st.button("Stwórz przepis", key="create"):
             st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": np, "Skladnik": "Składnik", "Ilosc": 0}])], ignore_index=True)
             save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
     if not st.session_state.przepisy.empty:
@@ -189,17 +199,17 @@ elif st.session_state.page == "Dodaj":
                 st.session_state.przepisy = st.session_state.przepisy.drop(idx).reset_index(drop=True)
                 save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
         ca, cb = st.columns(2)
-        if ca.button("➕ Dodaj wiersz"):
+        if ca.button("➕ Dodaj wiersz", key="add_row"):
             st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": wyb, "Skladnik": "", "Ilosc": 0}])], ignore_index=True)
             st.rerun()
-        if cb.button("💾 ZAPISZ PRZEPIS", type="primary"):
+        if cb.button("💾 ZAPISZ PRZEPIS", type="primary", key="save_recipe"):
             for r in upd: st.session_state.przepisy.at[r['idx'], 'Skladnik'], st.session_state.przepisy.at[r['idx'], 'Ilosc'] = r['s'], r['i']
             save_data(st.session_state.przepisy, "Przepisy"); st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
 elif st.session_state.page == "Zakupy":
     st.header("🛒 Zakupy")
-    if st.button("⬅ POWRÓT"): st.session_state.page = "Home"; st.rerun()
+    if st.button("⬅ POWRÓT", key="back"): st.session_state.page = "Home"; st.rerun()
     braki = analizuj_zapasy()
     if braki:
         for p, d in braki.items(): st.warning(f"🔸 **{p.capitalize()}**: kup **{d['brak']}** (masz: {d['mam']}, potrzebne: {d['potr']})")
