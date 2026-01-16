@@ -2,132 +2,137 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
-# Ustawienia strony - tryb szeroki i fajna ikona
-st.set_page_config(page_title="Mój Planer Posiłków", layout="wide", initial_sidebar_state="collapsed")
+# Konfiguracja
+st.set_page_config(page_title="Planer Inteligentny", layout="wide", initial_sidebar_state="collapsed")
 
-# Stylowanie przycisków za pomocą CSS, aby wyglądały jak duże kafle
+# Polski format dni tygodnia
+DNI_TYGODNIA = {
+    0: "Poniedziałek", 1: "Wtorek", 2: "Środa", 3: "Czwartek",
+    4: "Piątek", 5: "Sobota", 6: "Niedziela"
+}
+
+# Style CSS dla dużych przycisków
 st.markdown("""
     <style>
-    div.stButton > button {
-        width: 100%;
-        height: 100px;
-        font-size: 20px;
-        font-weight: bold;
-        border-radius: 15px;
-        margin-bottom: 10px;
-    }
+    div.stButton > button { width: 100%; height: 80px; font-size: 18px; font-weight: bold; border-radius: 12px; }
+    .status-ok { color: #2ecc71; font-weight: bold; }
+    .status-alert { color: #e74c3c; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
-
-st.title("🍴 Menu Główne")
 
 # --- INICJALIZACJA DANYCH ---
 if 'przepisy' not in st.session_state:
     st.session_state.przepisy = pd.DataFrame([
         {"Nazwa": "Jajecznica", "Typ": "Śniadanie", "Skladniki": "jajka, masło"},
         {"Nazwa": "Kurczak", "Typ": "Lunch", "Skladniki": "kurczak, ryż"},
-        {"Nazwa": "Kanapki", "Typ": "Kolacja", "Skladniki": "chleb, ser"}
     ])
 
+if 'spizarnia' not in st.session_state:
+    st.session_state.spizarnia = set(["jajka", "ryż"]) # Przykładowe zapasy
+
 if 'plan' not in st.session_state:
-    dni = [(datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(30)]
+    dni = []
+    for i in range(7):
+        d = datetime.now() + timedelta(days=i)
+        nazwa_dnia = f"{d.strftime('%Y-%m-%d')} ({DNI_TYGODNIA[d.weekday()]})"
+        dni.append(nazwa_dnia)
     st.session_state.plan = pd.DataFrame({"Data": dni, "Śniadanie": "", "Lunch": "", "Kolacja": ""})
 
 if 'page' not in st.session_state:
     st.session_state.page = "Home"
 
-# --- NAWIGACJA ---
-def set_page(name):
-    st.session_state.page = name
-
-# --- DASHBOARD (PULPIT) ---
-if st.session_state.page == "Home":
-    col1, col2, col3 = st.columns(3)
+# --- LOGIKA ---
+def sprawdz_skladniki(danie_nazwa):
+    if not danie_nazwa: return ""
+    przepis = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == danie_nazwa]
+    if przepis.empty: return ""
     
-    with col1:
-        if st.button("📅 MÓJ PLAN"):
-            set_page("Plan")
-            st.rerun()
-            
-    with col2:
-        if st.button("➕ DODAJ PRZEPIS"):
-            set_page("Dodaj")
-            st.rerun()
-            
-    with col3:
-        if st.button("🛒 LISTA ZAKUPÓW"):
-            set_page("Zakupy")
-            st.rerun()
-
-# --- WIDOK: PLANOWANIE ---
-elif st.session_state.page == "Plan":
-    if st.button("⬅ Powrót do Menu"):
-        set_page("Home")
-        st.rerun()
-        
-    st.subheader("Kalendarz posiłków (30 dni)")
+    wymagane = [s.strip().lower() for s in przepis.iloc[0]['Skladniki'].split(',')]
+    brakujace = [s for s in wymagane if s not in st.session_state.spizarnia]
     
-    # Wyświetlamy edytor danych z listami rozwijanymi
-    options_s = [""] + st.session_state.przepisy[st.session_state.przepisy['Typ'] == "Śniadanie"]['Nazwa'].tolist()
-    options_l = [""] + st.session_state.przepisy[st.session_state.przepisy['Typ'] == "Lunch"]['Nazwa'].tolist()
-    options_k = [""] + st.session_state.przepisy[st.session_state.przepisy['Typ'] == "Kolacja"]['Nazwa'].tolist()
-
-    edited_plan = st.data_editor(
-        st.session_state.plan,
-        use_container_width=True,
-        column_config={
-            "Data": st.column_config.Column(disabled=True),
-            "Śniadanie": st.column_config.SelectboxColumn("Śniadanie", options=options_s),
-            "Lunch": st.column_config.SelectboxColumn("Lunch", options=options_l),
-            "Kolacja": st.column_config.SelectboxColumn("Kolacja", options=options_k),
-        },
-        hide_index=True
-    )
-    
-    if st.button("Zapisz zmiany w planie"):
-        st.session_state.plan = edited_plan
-        st.success("Plan zapisany!")
-
-# --- WIDOK: DODAWANIE ---
-elif st.session_state.page == "Dodaj":
-    if st.button("⬅ Powrót do Menu"):
-        set_page("Home")
-        st.rerun()
-        
-    st.subheader("Dodaj nowe danie")
-    with st.form("recipe_form"):
-        n = st.text_input("Nazwa dania")
-        t = st.selectbox("Typ", ["Śniadanie", "Lunch", "Kolacja"])
-        s = st.text_area("Składniki (rozdziel przecinkiem)")
-        if st.form_submit_button("Dodaj przepis"):
-            new_row = {"Nazwa": n, "Typ": t, "Skladniki": s}
-            st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([new_row])], ignore_index=True)
-            st.success(f"Dodano: {n}")
-
-# --- WIDOK: ZAKUPY ---
-elif st.session_state.page == "Zakupy":
-    if st.button("⬅ Powrót do Menu"):
-        set_page("Home")
-        st.rerun()
-        
-    st.subheader("Twoja lista zakupów")
-    
-    # Zbierz wszystkie wybrane dania z planu
-    all_selected = pd.concat([st.session_state.plan['Śniadanie'], st.session_state.plan['Lunch'], st.session_state.plan['Kolacja']])
-    all_selected = all_selected[all_selected != ""] # usuń puste
-    
-    # Wyciągnij składniki
-    recipes_in_plan = st.session_state.przepisy[st.session_state.przepisy['Nazwa'].isin(all_selected)]
-    
-    full_list = []
-    for ingredient_string in recipes_in_plan['Skladniki']:
-        items = [i.strip() for i in ingredient_string.split(',')]
-        full_list.extend(items)
-    
-    unique_ingredients = sorted(list(set(full_list)))
-    
-    if unique_ingredients:
-        for ing in unique_ingredients:
-            st.checkbox(ing, key=ing)
+    if not brakujace:
+        return "✅ (Wszystko jest)"
     else:
-        st.info("Brak produktów. Najpierw zaplanuj posiłki!")
+        return f"🛒 Brak: {', '.join(brakujace)}"
+
+# --- NAWIGACJA ---
+if st.session_state.page == "Home":
+    st.title("🍴 Planer z Inteligencją Spiżarni")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("📅 MÓJ PLAN"): st.session_state.page = "Plan"; st.rerun()
+        if st.button("➕ DODAJ PRZEPIS"): st.session_state.page = "Dodaj"; st.rerun()
+    with c2:
+        if st.button("🏠 MOJA SPIŻARNIA"): st.session_state.page = "Spizarnia"; st.rerun()
+        if st.button("🛒 LISTA ZAKUPÓW"): st.session_state.page = "Zakupy"; st.rerun()
+
+elif st.session_state.page == "Spizarnia":
+    if st.button("⬅ Powrót"): st.session_state.page = "Home"; st.rerun()
+    st.subheader("Zarządzaj zapasami")
+    nowy_produkt = st.text_input("Dodaj produkt do spiżarni (np. jajka, mleko):").lower()
+    if st.button("Dodaj do spiżarni"):
+        st.session_state.spizarnia.add(nowy_produkt)
+    
+    st.write("### Twoje zapasy:")
+    do_usuniecia = []
+    for p in sorted(list(st.session_state.spizarnia)):
+        col_p, col_del = st.columns([4, 1])
+        col_p.write(f"- {p}")
+        if col_del.button("Usuń", key=f"del_{p}"):
+            do_usuniecia.append(p)
+    
+    for p in do_usuniecia:
+        st.session_state.spizarnia.remove(p)
+        st.rerun()
+
+elif st.session_state.page == "Plan":
+    if st.button("⬅ Powrót"): st.session_state.page = "Home"; st.rerun()
+    st.subheader("Planowanie tygodnia")
+    
+    # Wyświetlamy statusy pod tabelą dla przejrzystości
+    for index, row in st.session_state.plan.iterrows():
+        with st.expander(f"📅 {row['Data']}"):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                opts = [""] + st.session_state.przepisy[st.session_state.przepisy['Typ'] == "Śniadanie"]['Nazwa'].tolist()
+                st.session_state.plan.at[index, 'Śniadanie'] = st.selectbox(f"Śniadanie", opts, index=opts.index(row['Śniadanie']) if row['Śniadanie'] in opts else 0, key=f"s_{index}")
+                st.write(sprawdz_skladniki(st.session_state.plan.at[index, 'Śniadanie']))
+            with col2:
+                opts = [""] + st.session_state.przepisy[st.session_state.przepisy['Typ'] == "Lunch"]['Nazwa'].tolist()
+                st.session_state.plan.at[index, 'Lunch'] = st.selectbox(f"Lunch", opts, index=opts.index(row['Lunch']) if row['Lunch'] in opts else 0, key=f"l_{index}")
+                st.write(sprawdz_skladniki(st.session_state.plan.at[index, 'Lunch']))
+            with col3:
+                opts = [""] + st.session_state.przepisy[st.session_state.przepisy['Typ'] == "Kolacja"]['Nazwa'].tolist()
+                st.session_state.plan.at[index, 'Kolacja'] = st.selectbox(f"Kolacja", opts, index=opts.index(row['Kolacja']) if row['Kolacja'] in opts else 0, key=f"k_{index}")
+                st.write(sprawdz_skladniki(st.session_state.plan.at[index, 'Kolacja']))
+
+elif st.session_state.page == "Dodaj":
+    if st.button("⬅ Powrót"): st.session_state.page = "Home"; st.rerun()
+    st.subheader("Nowy przepis")
+    with st.form("f"):
+        n = st.text_input("Nazwa")
+        t = st.selectbox("Typ", ["Śniadanie", "Lunch", "Kolacja"])
+        s = st.text_area("Składniki (przecinek)")
+        if st.form_submit_button("Zapisz"):
+            st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa":n, "Typ":t, "Skladniki":s.lower()}])], ignore_index=True)
+            st.success("Dodano!")
+
+elif st.session_state.page == "Zakupy":
+    if st.button("⬅ Powrót"): st.session_state.page = "Home"; st.rerun()
+    st.subheader("Lista zakupów (tylko brakujące)")
+    
+    potrzebne = []
+    zaplanowane = pd.concat([st.session_state.plan['Śniadanie'], st.session_state.plan['Lunch'], st.session_state.plan['Kolacja']])
+    zaplanowane = zaplanowane[zaplanowane != ""]
+    
+    for danie in zaplanowane:
+        przepis = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == danie]
+        if not przepis.empty:
+            potrzebne.extend([i.strip().lower() for i in przepis.iloc[0]['Skladniki'].split(',')])
+    
+    do_kupienia = sorted(list(set([p for p in potrzebne if p not in st.session_state.spizarnia])))
+    
+    if do_kupienia:
+        for item in do_kupienia: st.checkbox(item, key=f"buy_{item}")
+    else:
+        st.success("Masz wszystko w spiżarni! Brak zakupów.")
