@@ -40,7 +40,11 @@ st.markdown("""
 def to_num(val):
     try: 
         if pd.isna(val) or str(val).strip() == "": return 0.0
-        return float(str(val).replace(',', '.').strip())
+        # Obsługa ułamków typu 1/2
+        if '/' in str(val):
+            num, den = str(val).split('/')
+            return float(num) / float(den)
+        return float(str(val).replace(',', '.').replace('g', '').replace('ml', '').strip())
     except: return 0.0
 
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -67,18 +71,24 @@ def save_now(df, ws_name):
 def analyze_recipe_image(uploaded_file):
     model = genai.GenerativeModel('gemini-1.5-flash')
     img = Image.open(uploaded_file)
-    prompt = """Analyze this recipe image and return ONLY a JSON object: 
-    {"Nazwa": "string", "Kalorie": float, "Porcje": float, "Skladniki": [{"Skladnik": "string", "Ilosc": float}]}
-    If any value is missing, use 0 for numbers and "Nieznany" for strings."""
+    # Bardziej precyzyjny prompt pod Twój zrzut ekranu
+    prompt = """Analyze this recipe screenshot. Return ONLY a valid JSON object. 
+    Look for recipe name, portion count (e.g. '4 porcje'), total calories for the whole recipe (calculate it if calories are per portion), and ingredients list with amounts.
+    Format: {"Nazwa": "string", "Kalorie": float, "Porcje": float, "Skladniki": [{"Skladnik": "string", "Ilosc": float}]}
+    Important: If calories are 'na 1 porcję', multiply it by the number of portions to get total calories. 
+    Only return JSON, no preamble."""
+    
     try:
         response = model.generate_content([prompt, img])
-        # Usuwanie znaczników markdown jeśli się pojawiły
         text = response.text
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
+        # Wyciąganie JSONa z tekstu (na wypadek gdyby AI dodało ```json ... ```)
+        json_match = re.search(r'\{.*\}', text, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group())
         return None
-    except: return None
+    except Exception as e:
+        st.error(f"Błąd AI: {e}")
+        return None
 
 # --- 4. SESJA I DANE ---
 if 'page' not in st.session_state: st.session_state.page = "Home"
@@ -139,7 +149,7 @@ elif st.session_state.page == "Plan":
                     przepis = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == wyb]
                     p_baza = max(1.0, to_num(przepis['Porcje'].iloc[0]))
                     p_val = p_istn if p_istn > 0 else p_baza
-                    cur_p = c_por.number_input("Ile porcji?", 0.5, 20.0, float(p_val), 0.5, key=f"n_{k}")
+                    cur_p = c_por.number_input("Porcje", 0.5, 20.0, float(p_val), 0.5, key=f"n_{k}")
                     
                     mnoznik = cur_p / p_baza
                     st.markdown("<div class='portion-box'>", unsafe_allow_html=True)
@@ -193,27 +203,26 @@ elif st.session_state.page == "Spizarnia":
         if c5.button("🗑️", key=f"del_{idx}"):
             st.session_state.spizarnia_df = st.session_state.spizarnia_df.drop(idx).reset_index(drop=True); st.rerun()
 
-# --- PAGE: PRZEPISY (PRZYWRÓCONA PEŁNA WERSJA) ---
+# --- PAGE: PRZEPISY ---
 elif st.session_state.page == "Dodaj":
     st.subheader("📖 Biblioteka Przepisów")
     if st.button("⬅ Menu"): st.session_state.page = "Home"; st.rerun()
     
-    # NOWY FEATURE OCR
-    with st.expander("📸 SKANUJ PRZEPIS (OCR AI)", expanded=False):
-        f = st.file_uploader("Wgraj zdjęcie przepisu", type=['jpg', 'png', 'jpeg'])
-        if f and st.button("Analizuj zdjęcie ✨"):
-            with st.spinner("AI czyta przepis..."):
+    with st.expander("📸 SKANUJ PRZEPIS (OCR AI)", expanded=True):
+        f = st.file_uploader("Wgraj zrzut ekranu przepisu", type=['jpg', 'png', 'jpeg'])
+        if f and st.button("Analizuj ✨"):
+            with st.spinner("AI analizuje obraz..."):
                 res = analyze_recipe_image(f)
                 if res: st.session_state.temp_recipe = res
-                else: st.error("Nie udało się odczytać zdjęcia. Spróbuj innego ujęcia.")
+                else: st.error("Nie udało się odczytać zdjęcia. Upewnij się, że tekst jest wyraźny.")
         
         if 'temp_recipe' in st.session_state:
             tr = st.session_state.temp_recipe
             st.markdown("<div class='scan-preview'>", unsafe_allow_html=True)
             st.write(f"### Podgląd: {tr['Nazwa']}")
-            st.write(f"🔥 Kalorie całości: {tr['Kalorie']} | 🍽 Porcje bazowe: {tr['Porcje']}")
+            st.write(f"🔥 Kalorie (całość): {tr['Kalorie']} | 🍽 Porcje: {tr['Porcje']}")
             st.table(pd.DataFrame(tr['Skladniki']))
-            if st.button("✅ ZATWIERDŹ I DODAJ DO BIBLIOTEKI"):
+            if st.button("✅ ZATWIERDŹ I ZAPISZ"):
                 for s in tr['Skladniki']:
                     st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{
                         "Nazwa": tr['Nazwa'], "Skladnik": s['Skladnik'], 
@@ -223,38 +232,28 @@ elif st.session_state.page == "Dodaj":
                 del st.session_state.temp_recipe; st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
-    with st.expander("➕ NOWA POTRAWA (RĘCZNIE)"):
-        np = st.text_input("Nazwa potrawy")
-        pk = st.number_input("Kaloryczność (suma)", value=0.0, step=10.0)
-        pp = st.number_input("Liczba porcji w przepisie", value=1.0, min_value=1.0, step=1.0)
-        if st.button("Utwórz kartę"):
-            if np:
-                st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": np, "Skladnik": "Składnik", "Ilosc": 0.0, "Kalorie": pk, "Porcje": pp}])], ignore_index=True); st.rerun()
-
-    if not st.session_state.przepisy.empty:
-        with st.expander("📝 EDYTUJ PRZEPISY", expanded=True):
-            wyb_e = st.selectbox("Wybierz potrawę do edycji:", sorted(st.session_state.przepisy['Nazwa'].unique()))
+    with st.expander("📝 EDYTUJ PRZEPISY"):
+        wyb_e = st.selectbox("Wybierz potrawę:", [""] + sorted(st.session_state.przepisy['Nazwa'].unique().tolist()))
+        if wyb_e:
             mask = st.session_state.przepisy['Nazwa'] == wyb_e
-            
             ck, cp = st.columns(2)
             st.session_state.przepisy.loc[mask, 'Kalorie'] = ck.number_input("Kalorie całości:", value=float(to_num(st.session_state.przepisy.loc[mask, 'Kalorie'].iloc[0])))
             st.session_state.przepisy.loc[mask, 'Porcje'] = cp.number_input("Porcje bazowe:", value=float(to_num(st.session_state.przepisy.loc[mask, 'Porcje'].iloc[0])))
             
             for idx, row in st.session_state.przepisy[mask].iterrows():
                 c1, c2, c3 = st.columns([3, 1, 0.5])
-                st.session_state.przepisy.at[idx, 'Skladnik'] = c1.text_input("Składnik", row['Skladnik'], key=f"sk_{idx}", label_visibility="collapsed")
-                st.session_state.przepisy.at[idx, 'Ilosc'] = c2.number_input("Ilość", value=float(to_num(row['Ilosc'])), key=f"il_{idx}", label_visibility="collapsed")
+                st.session_state.przepisy.at[idx, 'Skladnik'] = c1.text_input("S", row['Skladnik'], key=f"sk_{idx}", label_visibility="collapsed")
+                st.session_state.przepisy.at[idx, 'Ilosc'] = c2.number_input("I", value=float(to_num(row['Ilosc'])), key=f"il_{idx}", label_visibility="collapsed")
                 if c3.button("🗑️", key=f"rd_{idx}"):
                     st.session_state.przepisy = st.session_state.przepisy.drop(idx).reset_index(drop=True); st.rerun()
             
-            c_add, c_save = st.columns(2)
-            if c_add.button("➕ Dodaj składnik"):
+            if st.button("➕ Dodaj składnik"):
                 st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{
                     "Nazwa": wyb_e, "Skladnik": "", "Ilosc": 0.0, 
                     "Kalorie": st.session_state.przepisy.loc[mask, 'Kalorie'].iloc[0], 
                     "Porcje": st.session_state.przepisy.loc[mask, 'Porcje'].iloc[0]
                 }])], ignore_index=True); st.rerun()
-            if c_save.button("💾 ZAPISZ PRZEPIS", type="primary"): 
+            if st.button("💾 ZAPISZ ZMIANY", type="primary"): 
                 save_now(st.session_state.przepisy, "Przepisy")
 
 # --- PAGE: ZAKUPY ---
