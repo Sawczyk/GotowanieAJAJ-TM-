@@ -2,13 +2,9 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime, timedelta
-import google.generativeai as genai
-from PIL import Image
-import io
-import re
 
 # --- 1. STYLIZACJA (AESTHETIC & NEAT) ---
-st.set_page_config(page_title="Planer Kuchni AI", page_icon="🍳", layout="wide")
+st.set_page_config(page_title="Planer Kuchni", page_icon="🍳", layout="wide")
 
 st.markdown("""
     <style>
@@ -20,43 +16,15 @@ st.markdown("""
     div.stButton > button[kind="primary"] { background-color: #2E7D32 !important; color: white !important; height: 55px !important; width: 100% !important; border-radius: 10px; font-weight: 600 !important; }
     div.stButton > button { border-radius: 10px; font-weight: 600 !important; }
     .missing-tag { color: #d32f2f; font-weight: 600; font-size: 0.85rem; display: block; margin-top: -5px; margin-bottom: 10px; }
-    .debug-box { background-color: #f0f2f6; border-radius: 8px; padding: 15px; border: 1px solid #ddd; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. KONFIGURACJA AI ---
-api_status = False
-if "GOOGLE_API_KEY" in st.secrets:
-    try:
-        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        api_status = True
-    except: pass
-
+# --- 2. FUNKCJE POMOCNICZE ---
 def to_num(val):
-    try: return float(str(val).replace(',', '.').replace('g', '').replace('ml', '').strip())
+    try: return float(str(val).replace(',', '.').strip())
     except: return 0.0
 
-def clean_and_parse(text):
-    text = text.replace('*', '').strip()
-    if ";" in text:
-        parts = text.split(";")
-        name = parts[0].strip()
-        amount_str = re.sub(r'[^0-9.]', '', parts[1].replace(',', '.'))
-        try: amount = float(amount_str) if amount_str else 0.0
-        except: amount = 0.0
-        return name, amount
-    return None, None
-
-def analyze_recipe_image(uploaded_file):
-    try:
-        img = Image.open(uploaded_file)
-        prompt = "Zidentyfikuj składniki. Format: nazwa;liczba (np. Maka;500). TYLKO te linie."
-        response = model.generate_content([prompt, img])
-        return response.text.strip()
-    except Exception as e: return f"Błąd: {str(e)}"
-
-# --- 3. DANE ---
+# --- 3. DANE I POŁĄCZENIE ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def safe_load(ws, cols):
@@ -74,9 +42,9 @@ def save_now(df, ws_name):
         conn.update(worksheet=ws_name, data=df.dropna(how='all'))
         st.cache_data.clear()
         st.toast(f"✅ Zapisano: {ws_name}")
-    except: st.error("Błąd zapisu!")
+    except: st.error("Błąd zapisu! Sprawdź uprawnienia arkusza.")
 
-# --- 4. INICJALIZACJA ---
+# --- 4. INICJALIZACJA SESJI ---
 if 'page' not in st.session_state: st.session_state.page = "Home"
 if 'week_offset' not in st.session_state: st.session_state.week_offset = 0
 
@@ -87,7 +55,7 @@ if 'plan_df' not in st.session_state: st.session_state.plan_df = safe_load("Plan
 dni_pl = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
 miesiace_pl = ["stycznia", "lutego", "marca", "kwietnia", "maja", "czerwca", "lipca", "sierpnia", "września", "października", "listopada", "grudnia"]
 
-# --- 5. LOGIKA STRON ---
+# --- 5. RENDEROWANIE STRON ---
 
 # --- HOME ---
 if st.session_state.page == "Home":
@@ -101,10 +69,10 @@ if st.session_state.page == "Home":
 
 # --- PLANOWANIE ---
 elif st.session_state.page == "Plan":
-    st.subheader("📅 Plan posiłków")
+    st.subheader("📅 Planowanie tygodnia")
     c_back, c_save = st.columns(2)
     if c_back.button("⬅ Menu Główne"): st.session_state.page = "Home"; st.rerun()
-    if c_save.button("💾 ZAPISZ CAŁY PLAN", type="primary"): save_now(st.session_state.plan_df, "Plan")
+    if c_save.button("💾 ZAPISZ PLAN", type="primary"): save_now(st.session_state.plan_df, "Plan")
     
     start = datetime.now() - timedelta(days=datetime.now().weekday()) + timedelta(weeks=st.session_state.week_offset)
     t_id = start.strftime("%Y-%V")
@@ -115,32 +83,33 @@ elif st.session_state.page == "Plan":
                 k = f"{t_id}_{d_n}_{typ}"
                 istn = st.session_state.plan_df[st.session_state.plan_df['Klucz'] == k]['Wybor'].values[0] if k in st.session_state.plan_df['Klucz'].values else "Brak"
                 opcje = ["Brak"] + sorted([p for p in st.session_state.przepisy['Nazwa'].unique().tolist() if str(p).strip()])
-                p_data = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == istn]
-                kcal = int(p_data['Kalorie'].iloc[0]) if not p_data.empty and istn != "Brak" else 0
-                wyb = st.selectbox(f"{typ} ({kcal} kcal):", opcje, index=opcje.index(istn) if istn in opcje else 0, key=k)
+                
+                wyb = st.selectbox(f"{typ}:", opcje, index=opcje.index(istn) if istn in opcje else 0, key=k)
+                
                 if wyb != "Brak":
-                    skladniki_p = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == wyb]
+                    sklad_p = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == wyb]
                     braki = []
-                    for _, r in skladniki_p.iterrows():
+                    for _, r in sklad_p.iterrows():
                         mam = st.session_state.spizarnia_df[st.session_state.spizarnia_df['Produkt'].str.lower() == str(r['Skladnik']).lower()]['Ilosc'].sum()
                         if to_num(mam) < to_num(r['Ilosc']): braki.append(str(r['Skladnik']).lower())
                     if braki: st.markdown(f"<span class='missing-tag'>⚠️ Brak: {', '.join(braki)}</span>", unsafe_allow_html=True)
+
                 if wyb != istn:
                     st.session_state.plan_df = st.session_state.plan_df[st.session_state.plan_df['Klucz'] != k]
                     st.session_state.plan_df = pd.concat([st.session_state.plan_df, pd.DataFrame([{"Klucz": k, "Wybor": wyb}])], ignore_index=True)
 
 # --- SPIŻARNIA ---
 elif st.session_state.page == "Spizarnia":
-    st.subheader("🏠 Spiżarnia")
+    st.subheader("🏠 Stan Spiżarni")
     c_back, c_save = st.columns(2)
     if c_back.button("⬅ Menu Główne"): st.session_state.page = "Home"; st.rerun()
-    if c_save.button("💾 ZAPISZ STAN", type="primary"): save_now(st.session_state.spizarnia_df, "Spizarnia")
+    if c_save.button("💾 ZAPISZ SPIŻARNIĘ", type="primary"): save_now(st.session_state.spizarnia_df, "Spizarnia")
     
     with st.expander("➕ Dodaj nowy produkt"):
         with st.form("new_s", clear_on_submit=True):
             c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-            n, q, s, m = c1.text_input("Nazwa"), c2.number_input("Ilość", 0.0), c3.checkbox("Stały?"), c4.number_input("Min", 0.0)
-            if st.form_submit_button("Dodaj"):
+            n, q, s, m = c1.text_input("Nazwa"), c2.number_input("Ilość", 0.0), c3.checkbox("Stały produkt?"), c4.number_input("Min. Ilość", 0.0)
+            if st.form_submit_button("Dodaj do listy"):
                 st.session_state.spizarnia_df = pd.concat([st.session_state.spizarnia_df, pd.DataFrame([{"Produkt": n, "Ilosc": q, "Czy_Stale": "TAK" if s else "NIE", "Min_Ilosc": m}])], ignore_index=True); st.rerun()
 
     for idx, row in st.session_state.spizarnia_df.iterrows():
@@ -154,46 +123,43 @@ elif st.session_state.page == "Spizarnia":
         if c5.button("🗑️", key=f"sdel_{idx}"):
             st.session_state.spizarnia_df = st.session_state.spizarnia_df.drop(idx).reset_index(drop=True); st.rerun()
 
-# --- PRZEPISY (OCR) ---
+# --- PRZEPISY (MANUALNE) ---
 elif st.session_state.page == "Dodaj":
-    st.subheader("📖 Baza Przepisów & AI")
+    st.subheader("📖 Zarządzanie Przepisami")
     if st.button("⬅ Menu Główne"): st.session_state.page = "Home"; st.rerun()
     
-    with st.expander("➕ NOWY PRZEPIS (ANALIZA ZDJĘCIA)", expanded=True):
-        nazwa_p = st.text_input("Nazwa potrawy")
-        foto = st.file_uploader("Zdjęcie przepisu", type=['jpg','png','jpeg'])
-        if st.button("✨ ANALIZUJ I DODAJ", type="primary"):
-            if not nazwa_p: st.error("Podaj nazwę!")
-            else:
-                if foto and api_status:
-                    with st.spinner("AI pracuje..."):
-                        raw = analyze_recipe_image(foto)
-                        st.info("Logi AI (diagnostyka):")
-                        st.code(raw)
-                        nowe = []
-                        for l in raw.split("\n"):
-                            s, q = clean_and_parse(l)
-                            if s: nowe.append({"Nazwa": nazwa_p, "Skladnik": s, "Ilosc": q, "Kalorie": 450})
-                        if nowe: st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame(nowe)], ignore_index=True)
-                else:
-                    st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": nazwa_p, "Skladnik": "Składnik", "Ilosc": 0, "Kalorie": 450}])], ignore_index=True)
+    with st.expander("➕ DODAJ NOWĄ POTRAWĘ"):
+        np = st.text_input("Nazwa potrawy (np. Spaghetti)")
+        kcal = st.number_input("Kaloryczność porcji (kcal)", value=0)
+        if st.button("Utwórz pusty przepis", type="primary"):
+            if np:
+                st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": np, "Skladnik": "Składnik", "Ilosc": 0, "Kalorie": kcal}])], ignore_index=True)
                 st.rerun()
 
     if not st.session_state.przepisy.empty:
-        wyb = st.selectbox("Edytuj:", sorted(st.session_state.przepisy['Nazwa'].unique()))
+        wyb = st.selectbox("Wybierz potrawę do edycji:", sorted(st.session_state.przepisy['Nazwa'].unique()))
         mask = st.session_state.przepisy['Nazwa'] == wyb
+        
+        st.session_state.przepisy.loc[mask, 'Kalorie'] = st.number_input("Kcal:", value=int(st.session_state.przepisy.loc[mask, 'Kalorie'].iloc[0]))
+        
+        st.write("Składniki:")
         for idx, row in st.session_state.przepisy[mask].iterrows():
             c1, c2, c3 = st.columns([3, 1, 0.5])
-            st.session_state.przepisy.at[idx, 'Skladnik'] = c1.text_input("S", row['Skladnik'], key=f"rn_{idx}", label_visibility="collapsed")
-            st.session_state.przepisy.at[idx, 'Ilosc'] = c2.number_input("Q", float(row['Ilosc']), key=f"ri_{idx}", label_visibility="collapsed")
+            st.session_state.przepisy.at[idx, 'Skladnik'] = c1.text_input("Nazwa składnika", row['Skladnik'], key=f"rn_{idx}", label_visibility="collapsed")
+            st.session_state.przepisy.at[idx, 'Ilosc'] = c2.number_input("Ilość", float(row['Ilosc']), key=f"ri_{idx}", label_visibility="collapsed")
             if c3.button("🗑️", key=f"rdel_{idx}"):
                 st.session_state.przepisy = st.session_state.przepisy.drop(idx).reset_index(drop=True); st.rerun()
-        if st.button("💾 ZAPISZ PRZEPIS", type="primary"): save_now(st.session_state.przepisy, "Przepisy")
+        
+        c_add, c_save = st.columns(2)
+        if c_add.button("➕ Dodaj kolejny składnik"):
+            st.session_state.przepisy = pd.concat([st.session_state.przepisy, pd.DataFrame([{"Nazwa": wyb, "Skladnik": "", "Ilosc": 0, "Kalorie": st.session_state.przepisy.loc[mask, 'Kalorie'].iloc[0]}])], ignore_index=True); st.rerun()
+        if c_save.button("💾 ZAPISZ PRZEPIS", type="primary"): save_now(st.session_state.przepisy, "Przepisy")
 
 # --- ZAKUPY ---
 elif st.session_state.page == "Zakupy":
-    st.subheader("🛒 Lista Zakupów")
+    st.subheader("🛒 Twoja Lista Zakupów")
     if st.button("⬅ Menu Główne"): st.session_state.page = "Home"; st.rerun()
+    
     t_id = datetime.now().strftime("%Y-%V")
     potrzeby = {}
     plan_obecny = st.session_state.plan_df[st.session_state.plan_df['Klucz'].str.contains(t_id, na=False)]
@@ -202,15 +168,20 @@ elif st.session_state.page == "Zakupy":
             skladniki = st.session_state.przepisy[st.session_state.przepisy['Nazwa'] == potrawa]
             for _, r in skladniki.iterrows():
                 s_name = str(r['Skladnik']).lower().strip()
-                if s_name: potrzeby[s_name] = potrzeby.get(s_name, 0) + to_num(r['Ilosc'])
+                if s_name and s_name not in ["składnik", "nan"]:
+                    potrzeby[s_name] = potrzeby.get(s_name, 0) + to_num(r['Ilosc'])
+    
     braki = []
     for _, r in st.session_state.spizarnia_df.iterrows():
         p_name = str(r['Produkt']).lower().strip()
         mam = to_num(r['Ilosc'])
         min_wym = to_num(r['Min_Ilosc']) if str(r['Czy_Stale']).upper() == "TAK" else 0
         wymagane = max(potrzeby.get(p_name, 0), min_wym)
-        if wymagane > mam: braki.append({"Produkt": p_name.capitalize(), "Kupić": wymagane - mam, "W spiżarni": mam})
+        if wymagane > mam:
+            braki.append({"Produkt": p_name.capitalize(), "Kupić": wymagane - mam, "W spiżarni": mam})
         if p_name in potrzeby: del potrzeby[p_name]
-    for s_name, ile in potrzeby.items(): braki.append({"Produkt": s_name.capitalize(), "Kupić": ile, "W spiżarni": 0})
+    for s_name, ile in potrzeby.items():
+        braki.append({"Produkt": s_name.capitalize(), "Kupić": ile, "W spiżarni": 0})
+
     if braki: st.table(pd.DataFrame(braki))
-    else: st.success("Masz wszystko! 🎉")
+    else: st.success("Masz wszystko, co zaplanowane! 🎉")
